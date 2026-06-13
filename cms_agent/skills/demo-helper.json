@@ -1,0 +1,23 @@
+{
+  "name": "业务助手",
+  "version": "1.0",
+  "description": "示例 skill：教 Agent 认识退款、业绩概览、重点客户、待办等常见问法",
+  "rules": [
+    {
+      "triggers": ["退款", "怎么退款", "退货流程"],
+      "respond": "退款流程：1) 在对应机会标记为输单并写明原因；2) 通知财务发起退款；3) 在客户备注同步处理结果。"
+    },
+    {
+      "triggers": ["本月业绩", "业绩概览", "经营概况"],
+      "action": "dashboard"
+    },
+    {
+      "triggers": ["重点客户", "重要客户", "大客户"],
+      "action": "list_customers"
+    },
+    {
+      "triggers": ["待办", "我的任务", "今天做什么"],
+      "action": "list_tasks"
+    }
+  ]
+}
