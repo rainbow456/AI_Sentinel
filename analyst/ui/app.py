@@ -22,8 +22,12 @@ from analyst.report_engine import (
     generate_single_report,
 )
 from analyst.nl_engine import get_demo_scenarios
+from analyst.demo import DemoOrchestrator
 
 app = Flask(__name__)
+
+# ── Demo orchestrator instance ──────────────────────────────────────────────
+_demo = DemoOrchestrator()
 
 # ── Global agent instance ─────────────────────────────────────────────────
 
@@ -308,6 +312,62 @@ def splunk_indexes():
 # ── MCP & LLM status ──────────────────────────────────────────────────────
 
 @app.route("/api/mcp/status")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Demo Walkthrough API (6-step interactive demo)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/demo/state")
+def demo_state():
+    """Get current demo state."""
+    return jsonify(_demo.get_state())
+
+
+@app.route("/api/demo/reset", methods=["POST"])
+def demo_reset():
+    """Reset demo to initial state."""
+    return jsonify(_demo.reset())
+
+
+@app.route("/api/demo/step", methods=["POST"])
+def demo_step():
+    """
+    Execute a demo step.
+    Body: {"step": 1, "mode": "auto"} — step is 1..6, mode is optional.
+    """
+    data = request.get_json(silent=True) or {}
+    step = data.get("step", 1)
+    mode = data.get("mode")
+    return jsonify(_demo.run_step(int(step), mode))
+
+
+@app.route("/api/demo/run-all", methods=["POST"])
+def demo_run_all():
+    """
+    Run all 6 demo steps at once.
+    Body: {"mode": "auto"} — defaults to auto.
+    """
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "auto")
+    return jsonify(_demo.run_all(mode))
+
+
+@app.route("/api/demo/confirm-block", methods=["POST"])
+def demo_confirm_block():
+    """
+    Manually confirm a block in OBSERVE mode.
+    Body: {"alert_id": "ALT-..."}
+    """
+    data = request.get_json(silent=True) or {}
+    alert_id = data.get("alert_id", "").strip()
+    if not alert_id:
+        return jsonify({"error": "alert_id required"}), 400
+    return jsonify(_demo.confirm_block(alert_id))
+
+
+# ── MCP & LLM status ──────────────────────────────────────────────────────
+
+@app.route("/api/mcp/status")
 def mcp_status():
     _init_agent()
     return jsonify(_agent.mcp_status)
@@ -333,6 +393,7 @@ if __name__ == "__main__":
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     print("[STARTUP] Multi-Agent Command Center v3 starting...")
     print("[STARTUP] Dashboard: http://localhost:5000")
+    print("[STARTUP] Demo Walkthrough: /api/demo/state")
     print("[STARTUP] Demo scenarios available at /api/query/demo-scenarios")
     try:
         app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

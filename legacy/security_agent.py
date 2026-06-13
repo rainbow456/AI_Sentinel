@@ -1,7 +1,6 @@
 """
-Security Monitoring Agent — polls simulated Splunk for high-priority alerts,
-extracts threat intelligence, investigates correlated logs, and produces
-natural language summaries with visible thinking output.
+[DEPRECATED] — Superseded by analyst/agent.py (SecurityAgent with MCP, dual-mode, NL commands).
+Legacy Security Monitoring Agent — polls simulated Splunk for high-priority alerts.
 """
 
 import re

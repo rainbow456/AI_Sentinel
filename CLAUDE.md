@@ -4,84 +4,106 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository contains two independent systems:
+**AI Sentinel** integrates two modules:
 
-1. **AI Sentinel** (root level) — Security alert monitoring agent with Splunk simulator
-2. **Multi-Agent Command Center** (`analyst/`) — Causal decision tree observability & emergent behavior detection platform
+1. **Gateway** (`gateway/`) — Security gateway with detection middlewares and Splunk HEC reporting
+2. **Analyst** (`analyst/`) — Multi-alert security agent with MCP servers, decision trees, and emergent behavior detection
+3. **CMS Agent** (`cms_agent/`) — Demo CRM Agent with security guard wrapper
+4. **Legacy** (`legacy/`) — Deprecated files (kept for reference, not imported by anything)
 
-## 1. AI Sentinel (legacy, root)
+## Architecture
 
-Security monitoring agent + Flask dashboard for Splunk alerts.
+```
+User Input → Gateway (:3001) → Splunk HEC → Analyst MCP Servers → SecurityAgent → UI (:5000)
+                                  ↑                                 │
+                               events CSV                     Gateway MCP → /bans API
+                                                             Rule MCP → rules.yaml
+```
+
+## Gateway Module (`gateway/`)
+
+FastAPI app on port 3001. Entry: `python -m gateway.main`
 
 | File | Purpose |
 |------|---------|
-| `simulated_splunk.py` | Mock Splunk with 8 attack types, background event generation |
-| `security_agent.py` | CLI agent: polls alerts → extracts IP → investigates → NL summary |
-| `app.py` | Flask web dashboard (original) |
-| `templates/dashboard.html` | Cyberpunk security alert dashboard |
+| `gateway/main.py` | FastAPI app, routes, detector loading, event emission |
+| `gateway/mcp_sender.py` | Async Splunk HEC sender with spooling sink (fail-soft) |
+| `gateway/disposition.py` | IP ban/policy store (SQLite), BanMiddleware, auto-ban |
+| `gateway/llm_proxy.py` | OpenAI-compatible `/v1/chat/completions` proxy with detection |
+| `gateway/preprocess.py` | De-obfuscation (zero-width, full-width, base64, URL) |
+| `gateway/rule_store.py` | SQLite rule store with version history and test runner |
+| `gateway/rules_api.py` | `/rules` REST API for rule CRUD |
+| `gateway/middlewares/` | Pluggable detectors — auto-registered on startup |
 
-```bash
-python security_agent.py       # CLI agent
-pip install flask && python app.py  # Web dashboard → localhost:5000
+**Key env vars**: `SPLUNK_HEC_URL`, `SPLUNK_HEC_TOKEN`, `GATEWAY_ID`, `LLM_PROVIDER`
+
+## Analyst Module (`analyst/`)
+
+Flask app on port 5000. Entry: `python -m analyst.ui.app`
+
+| File | Purpose |
+|------|---------|
+| `analyst/agent.py` | SecurityAgent — dual mode (AUTO/OBSERVE), NL commands, MCP integration |
+| `analyst/config.py` | Unified config from env vars with sensible defaults |
+| `analyst/models.py` | GatewayEvent, Span, CausalNode, DecisionTree, RuleDef, Finding, etc. |
+| `analyst/rule_engine.py` | Local rule matching (findings-based + keyword) |
+| `analyst/causal_analyzer.py` | Decision tree construction, emergence detection, storyline |
+| `analyst/nl_engine.py` | Intent classification, SPL generation, action parsing, rule search |
+| `analyst/report_engine.py` | Mermaid.js tree generation + emergent behavior reporting |
+| `analyst/mcp_client.py` | MCPBridge — manages subprocess MCP servers via stdio |
+| `analyst/servers/splunk_mcp.py` | Splunk Query MCP server (real Splunk or simulated) |
+| `analyst/servers/gateway_mcp.py` | Gateway Control MCP server (real gateway API or simulated) |
+| `analyst/servers/rule_mcp.py` | Rule Engine MCP server (YAML-backed, hot-reload) |
+| `analyst/ui/app.py` | Flask app with API endpoints and dashboard |
+| `analyst/ui/templates/dashboard.html` | Command center dashboard |
+
+**Key env vars**: `SPLUNK_HOST`, `SPLUNK_PORT`, `SPLUNK_USE_REAL`, `GATEWAY_HOST`, `GATEWAY_PORT`, `GATEWAY_USE_REAL`, `RULES_PATH`
+
+## CMS Agent (`cms_agent/`)
+
+Demo CRM Agent used as a "victim agent" to demonstrate Gateway integration.
+
+| File | Purpose |
+|------|---------|
+| `crm_agent.py` | CRM Agent with SQLite, natural language, CLI + Web modes |
+| `crm_secure.py` | Monkey-patch wrapper that routes all commands through Gateway |
+| `start_secure_crm.ps1` | One-click launcher (Gateway + CRM Agent) |
+
+## Shared Resources
+
+| File | Purpose |
+|------|---------|
+| `rules.yaml` | Shared security rules (source of truth for both modules) |
+| `.env.example` | All environment variables with defaults |
+| `start_all.ps1` | One-click startup: Gateway + Analyst + CMS Agent |
+| `tests/integration_test.py` | End-to-end integration test |
+| `data/` | Gateway event CSV files (loaded by Splunk MCP in simulated mode) |
+
+## Quick Start
+
+```powershell
+# One-click: Gateway + Analyst + CMS Agent
+.\start_all.ps1
+
+# Or start individually:
+python -m gateway.main        # Gateway → localhost:3001
+python -m analyst.ui.app      # Analyst UI → localhost:5000
+python tests/integration_test.py --quick  # Integration tests
 ```
 
-## 2. Multi-Agent Command Center (`analyst/`)
+## Data Format (Gateway ↔ Analyst)
 
-Observes OpenTelemetry-style Span data from multi-agent systems, constructs causal decision trees, detects emergent behaviors.
+Gateway emits `SecurityEvent` JSON with fields: `event_id, timestamp, module, blocked, handler, risk_score, user_input, subject_name, agent_id, findings[], gateway_id, llm_provider`
 
-### Architecture
+Analyst consumes the same format as `GatewayEvent`. The `findings` array uses: `detector, rule_hit, owasp_ast, severity, matched, description`
 
-```
-analyst/
-├── models.py          # Span, CausalNode, DecisionTree, EmergentAnomaly
-├── demo_spans.py      # 16 demo spans: 3-agent refund scenario
-├── agent.py           # CausalTreeAnalyzer: spans → tree → storyline
-├── report_engine.py   # ReportA (Mermaid.js tree) + ReportB (emergent behavior detection)
-└── ui/
-    ├── app.py         # Flask app with API endpoints
-    └── templates/
-        └── dashboard.html  # Interactive decision tree command center
-```
+**These are already aligned — do not change field names without updating both sides.**
 
-### Data Flow
+## Important Conventions
 
-```
-demo_spans.py → CausalTreeAnalyzer.build_decision_tree()
-  → DecisionTree (16 CausalNodes, 3 agents)
-  → ReportA.to_mermaid() + ReportB.summary()
-  → Flask API → Mermaid.js SVG + anomaly cards + stats
-```
-
-### Key Models
-
-- **Span**: agent_id, trace_id, span_id, parent_span_id, action, thought (CoT), tool_call, message_to, message_content, timestamp, causality_chain, context_snapshot, metadata
-- **CausalNode**: wraps Span with children list, depth, node_type (thinking/tool_call/message/delegation/error)
-- **DecisionTree**: root_nodes, node_map (span_id→CausalNode), agent_count, total_steps, time_span
-- **EmergentAnomaly**: 4 types (unauthorized_communication, excessive_negotiation, rule_bypass, reasoning_error) × 3 severities
-
-### Demo Scenario
-
-3-agent refund collaboration with 3 deliberate anomalies:
-- `ts-04`: tech_support → refund private message via unregistered action
-- `rf-03`: refund agent misreads amount (￥199→￥299) AND bypasses cs approval
-- `rf-05`: self-correction span
-
-### API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/` | Command center dashboard |
-| GET | `/api/trees` | Decision tree summaries (mermaid code included) |
-| GET | `/api/trees/<trace_id>` | Full tree + narratives + anomalies |
-| GET | `/api/anomalies` | All detected emergent behaviors |
-| GET | `/api/stats` | Agent count, steps, tree count, anomaly count |
-
-### Running
-
-```bash
-pip install flask
-python -m analyst.ui.app
-# → http://localhost:5000
-```
-
-No dependencies beyond Python 3.9+ stdlib and Flask.
+- Gateway detectors follow `detect(prompt: str) -> dict` convention and auto-register
+- Analyst MCP servers are launched as subprocesses by `MCPBridge`
+- Rule matching in analyst uses `findings[].rule_hit` as primary signal
+- Gateway `mcp_sender.py` uses `SPLUNK_HEC_URL`/`SPLUNK_HEC_TOKEN` (not analyst's `SPLUNK_HOST`/`SPLUNK_PORT`)
+- Legacy files in `legacy/` are deprecated and not imported by any module
+- The `__pycache__/` directories are excluded via `.gitignore`

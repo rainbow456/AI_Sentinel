@@ -1,5 +1,9 @@
 """
-Flask web dashboard for the Security Event Command center.
+[DEPRECATED] — This file has been superseded by analyst/ui/app.py.
+The new Flask dashboard integrates with the SecurityAgent, MCP servers,
+and real gateway event data. Use `python -m analyst.ui.app` instead.
+
+Legacy Flask web dashboard for the Security Event Command center.
 Serves a cyberpunk-themed real-time alert monitoring page backed by
 the simulated Splunk data source.
 """

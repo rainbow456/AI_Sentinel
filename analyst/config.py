@@ -38,18 +38,19 @@ class SplunkConfig:
     """Splunk connection settings."""
 
     # ── Connection ──────────────────────────────────────────────────────
-    host: str = "pdas-snap-dad-controlled.trycloudflare.com"
-    port: int = 443
+    host: str = "localhost"
+    port: int = 8089
     username: str = "admin"
-    password: str = "hero54110"                # Set via SPLUNK_PASSWORD env var — NEVER hardcode
-    token: str = ""                   # HTTP Event Collector token (alternative to user/pass)
+    password: str = ""                     # Set via SPLUNK_PASSWORD env var
+    token: str = ""                        # HEC token (for write-back)
+    hec_url: str = "https://localhost:8088/services/collector"
 
     # ── SSL / TLS ───────────────────────────────────────────────────────
-    use_ssl: bool = True
-    verify_ssl: bool = True
+    use_ssl: bool = False
+    verify_ssl: bool = False
 
     # ── Mode ────────────────────────────────────────────────────────────
-    use_real: bool = False    # True = connect to real Splunk; False = simulated backend
+    use_real: bool = False   # True = connect to real Splunk; False = simulated
 
     # ── Query defaults ──────────────────────────────────────────────────
     default_index: str = "gateway_events"
@@ -122,13 +123,14 @@ def get_config() -> AppConfig:
     """
     # ── Splunk ──────────────────────────────────────────────────────────
     splunk = SplunkConfig(
-        host=_env("SPLUNK_HOST", "splunk.example.com"),
+        host=_env("SPLUNK_HOST", "localhost"),
         port=_env_int("SPLUNK_PORT", 8089),
         username=_env("SPLUNK_USERNAME", "admin"),
         password=_env("SPLUNK_PASSWORD", ""),
         token=_env("SPLUNK_TOKEN", ""),
-        use_ssl=_env_bool("SPLUNK_USE_SSL", True),
-        verify_ssl=_env_bool("SPLUNK_VERIFY_SSL", True),
+        hec_url=_env("SPLUNK_HEC_URL", "https://localhost:8088/services/collector"),
+        use_ssl=_env_bool("SPLUNK_USE_SSL", False),
+        verify_ssl=_env_bool("SPLUNK_VERIFY_SSL", False),
         use_real=_env_bool("SPLUNK_USE_REAL", False),
         default_index=_env("SPLUNK_DEFAULT_INDEX", "gateway_events"),
         default_earliest=_env("SPLUNK_DEFAULT_EARLIEST", "-1h"),

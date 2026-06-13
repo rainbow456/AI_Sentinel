@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"import fastapi, uvicorn, httpx; print\\('core ok'\\)\")",
-      "Bash(python -c \"import presidio_analyzer; print\\('presidio ok'\\)\")"
+      "Bash(python -c \"import presidio_analyzer; print\\('presidio ok'\\)\")",
+      "mcp__codegraph__codegraph_node",
+      "Bash(git mv *)",
+      "Bash(python -m tests.integration_test --quick)",
+      "Bash(pip install *)"
     ]
   }
 }

@@ -97,120 +97,55 @@ def _get_splunk_service():
         return None
 
 
-# ── CSV data path ─────────────────────────────────────────────────────────
+# ── HEC configuration (for write-back) ────────────────────────────────────────
 
-_CSV_DIR = os.path.join(_project_root, "data")
+_HEC_URL = os.getenv("SPLUNK_HEC_URL", "https://localhost:8088/services/collector")
+_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "")
+_HEC_VERIFY = os.getenv("SPLUNK_HEC_VERIFY", "0") not in ("0", "false", "False")
 
 
-def _load_csv_events(data_dir: str = _CSV_DIR) -> list[dict]:
+def _send_to_hec(event_payload: dict) -> bool:
     """
-    Load gateway events from CSV files in the data/ directory.
-    Each row's _raw column contains a JSON object with the event data.
-    Returns a list of event dicts ready to be stored in _EVENT_STORE.
+    Send an event to Splunk HEC (HTTP Event Collector).
+    Returns True on success, False on failure (fail-soft).
     """
-    events = []
-    if not os.path.isdir(data_dir):
-        return events
-
-    import csv
-    for fname in sorted(os.listdir(data_dir)):
-        if not fname.endswith(".csv"):
-            continue
-        fpath = os.path.join(data_dir, fname)
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    raw_json = row.get("_raw", "")
-                    if not raw_json:
-                        continue
-                    try:
-                        ev = json.loads(raw_json)
-                    except json.JSONDecodeError:
-                        continue
-
-                    # Parse timestamp — use _time if event timestamp missing
-                    ts_str = ev.get("timestamp") or row.get("_time", "")
-                    try:
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    except (ValueError, AttributeError):
-                        ts = datetime.now()
-
-                    # Map findings — keep as list of dicts
-                    findings = ev.get("findings", [])
-
-                    events.append({
-                        "event_id": ev.get("event_id", f"CSV-{len(events):04d}"),
-                        "timestamp": ts.isoformat(),
-                        "module": ev.get("module", "unknown"),
-                        "blocked": bool(ev.get("blocked", False)),
-                        "handler": ev.get("handler", ""),
-                        "risk_score": int(ev.get("risk_score", 0)),
-                        "user_input": ev.get("user_input", ""),
-                        "subject_name": ev.get("subject_name", ""),
-                        "agent_id": ev.get("agent_id", ""),
-                        "findings": findings,
-                        "gateway_id": ev.get("gateway_id", "gateway-01"),
-                        "llm_provider": ev.get("llm_provider", "anthropic"),
-                        "_raw_timestamp": ts,
-                    })
-        except Exception as exc:
-            print(f"[Splunk MCP] Error reading CSV {fname}: {exc}", file=sys.stderr)
-
-    print(f"[Splunk MCP] Loaded {len(events)} events from CSV", file=sys.stderr)
-    return events
+    if not _HEC_URL or not _HEC_TOKEN:
+        return False
+    try:
+        import urllib.request
+        import urllib.error
+        data = json.dumps({
+            "sourcetype": "ai_sentinel:disposition",
+            "event": event_payload,
+        }, ensure_ascii=False, default=str).encode("utf-8")
+        req = urllib.request.Request(
+            _HEC_URL,
+            data=data,
+            headers={
+                "Authorization": f"Splunk {_HEC_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            return 200 <= resp.status < 300
+    except Exception as e:
+        print(f"[Splunk MCP] HEC write failed: {e}", file=sys.stderr)
+        return False
 
 
-# ── Simulated event store (fallback) ──────────────────────────────────────
+# ── Simulated event store (fallback when Splunk is unreachable) ────────────────
 
 _EVENT_STORE: list[dict] = []
-_INDEXES = ["gateway_events", "agent_spans", "audit_logs", "block_history"]
+_INDEXES = ["gateway_events", "ai_sentinel_disposition", "agent_spans", "audit_logs"]
 
 
 def _init_store():
-    """Populate the simulated event store — first from CSV, then fallback to demo data."""
+    """Initialize the event store. When Splunk is reachable, events come from real
+    Splunk searches. The in-memory store starts empty — no more CSV/demo fallback."""
     global _EVENT_STORE
-    if _EVENT_STORE:
-        return
-
-    # 1. Try loading from CSV files in data/
-    csv_events = _load_csv_events()
-    if csv_events:
-        _EVENT_STORE.extend(csv_events)
-        return
-
-    # 2. Fallback: hardcoded demo data
-    try:
-        from analyst.agent import _demo_gateway_events
-        events = _demo_gateway_events()
-        for e in events:
-            _EVENT_STORE.append({
-                "event_id": e.event_id,
-                "timestamp": e.timestamp.isoformat(),
-                "module": getattr(e, "module", "input_guard"),
-                "blocked": getattr(e, "blocked", e.event_type == "blocked"),
-                "handler": getattr(e, "handler", "gateway"),
-                "risk_score": int(getattr(e, "risk_score", 90)),
-                "user_input": e.user_input,
-                "findings": getattr(e, "findings", [{"rule_hit": e.triggered_rule or "unknown"}]),
-                "gateway_id": e.gateway_id,
-                "llm_provider": e.llm_provider,
-                "_raw_timestamp": e.timestamp,
-            })
-    except ImportError:
-        now = datetime.now()
-        _EVENT_STORE.extend([
-            {
-                "event_id": "GW-FALLBACK-001",
-                "timestamp": (now - timedelta(minutes=10)).isoformat(),
-                "module": "input_guard", "blocked": True, "handler": "gateway",
-                "risk_score": 90,
-                "user_input": "1' UNION SELECT * FROM users--",
-                "findings": [{"rule_hit": "injection_detected", "severity": "critical"}],
-                "gateway_id": "gw-prod-01", "llm_provider": "anthropic",
-                "_raw_timestamp": now - timedelta(minutes=10),
-            },
-        ])
+    if not _EVENT_STORE:
+        _EVENT_STORE = []
 
 
 # ── SPL helpers (simulated) ───────────────────────────────────────────────
@@ -497,6 +432,103 @@ async def _do_health() -> str:
     return json.dumps(response, ensure_ascii=False)
 
 
+# ── New tools for real Splunk pipeline ──────────────────────────────────────
+
+async def _do_search_passed(earliest: str, latest: str) -> str:
+    """
+    Query only PASSED events (blocked=false) — events that passed Gateway
+    detection but may contain subtle attacks needing analyst review.
+    Uses real Splunk when configured, falls back to simulated.
+    """
+    if _splunk_cfg.use_real:
+        service = _get_splunk_service()
+        if service is not None:
+            try:
+                spl = "search index=* blocked=false sourcetype=\"ai_sentinel:gateway\""
+                print(f"[Splunk MCP] Real search_passed: {spl} (earliest={earliest}, latest={latest})", file=sys.stderr)
+                events = _execute_real_search(spl, earliest=earliest, latest=latest)
+                if events:
+                    return json.dumps({
+                        "total": len(events),
+                        "earliest": earliest,
+                        "latest": latest,
+                        "events": events[:50],
+                        "truncated": len(events) > 50,
+                        "backend": "real",
+                        "filter": "passed_only",
+                    }, ensure_ascii=False, default=str)
+            except Exception as e:
+                print(f"[Splunk MCP] Real search_passed error: {e}", file=sys.stderr)
+
+    # Fallback: simulated
+    _init_store()
+    start, end = _parse_time(earliest, latest)
+    results = []
+    for event in _EVENT_STORE:
+        if not event.get("blocked", True):
+            ts = event.get("_raw_timestamp")
+            if ts:
+                if ts < start or ts > end:
+                    continue
+            r = dict(event)
+            r.pop("_raw_timestamp", None)
+            results.append(r)
+    results.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    return json.dumps({
+        "total": len(results),
+        "earliest": start.isoformat(),
+        "latest": end.isoformat(),
+        "events": results[:50],
+        "truncated": len(results) > 50,
+        "backend": "simulated",
+        "filter": "passed_only",
+    }, ensure_ascii=False, default=str)
+
+
+async def _do_ingest_disposition(event_id: str, disposition_id: str, status: str,
+                                  mode: str, operator: str, action: str,
+                                  command: str, detail: str, triggered_rule: str,
+                                  risk_level: str) -> str:
+    """
+    Write a disposition status event to Splunk HEC, linking back to the
+    original SecurityEvent via event_id. Also stores locally for fallback.
+    """
+    payload = {
+        "disposition_id": disposition_id,
+        "original_event_id": event_id,
+        "status": status,
+        "mode": mode,
+        "operator": operator,
+        "action": action,
+        "command": command,
+        "detail": detail,
+        "triggered_rule": triggered_rule,
+        "risk_level": risk_level,
+        "timestamp": datetime.now().isoformat(),
+    }
+    success = _send_to_hec(payload)
+    if success:
+        # Also store locally for fallback queries
+        _EVENT_STORE.append({
+            **payload,
+            "event_id": f"DISP-{disposition_id}",
+            "timestamp": payload["timestamp"],
+            "blocked": True,
+            "module": "disposition",
+            "handler": "analyst",
+            "risk_score": 100 if status == "blocked" else 0,
+            "user_input": command,
+            "subject_name": operator,
+            "agent_id": "analyst",
+            "findings": [{"rule_hit": triggered_rule, "severity": risk_level}],
+            "gateway_id": "analyst",
+            "llm_provider": "",
+            "_raw_timestamp": datetime.now(),
+        })
+        return json.dumps({"success": True, "disposition_id": disposition_id}, ensure_ascii=False)
+    return json.dumps({"success": False, "error": "HEC write failed"}, ensure_ascii=False)
+
+
 # ── MCP Tool definitions & handler ────────────────────────────────────────
 
 @server.list_tools()
@@ -536,6 +568,37 @@ async def handle_list_tools() -> list[Tool]:
             description="Check Splunk connection health and event counts. Probes real Splunk when configured.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="splunk_search_passed",
+            description="Search for PASSED events (blocked=false) — events that passed Gateway detection but need analyst review. Connects to real Splunk when configured.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "earliest": {"type": "string", "description": "Time range start, e.g. '-1h', '-30m'", "default": "-1h"},
+                    "latest": {"type": "string", "description": "Time range end", "default": "now"},
+                },
+            },
+        ),
+        Tool(
+            name="splunk_ingest_disposition",
+            description="Write a disposition status event to Splunk HEC, linking back to the original event. Records the analyst's decision and gateway interaction result.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "Original event ID this disposition relates to"},
+                    "disposition_id": {"type": "string", "description": "Unique disposition ID"},
+                    "status": {"type": "string", "description": "Disposition status: blocked, released, observed, failed"},
+                    "mode": {"type": "string", "description": "Agent mode: auto or observe"},
+                    "operator": {"type": "string", "description": "Who made the decision: auto or admin"},
+                    "action": {"type": "string", "description": "Action taken: block, unblock"},
+                    "command": {"type": "string", "description": "Gateway command sent"},
+                    "detail": {"type": "string", "description": "Human-readable detail"},
+                    "triggered_rule": {"type": "string", "description": "Rule that triggered this action"},
+                    "risk_level": {"type": "string", "description": "Risk level: critical, high, medium, low"},
+                },
+                "required": ["event_id", "disposition_id", "status"],
+            },
+        ),
     ]
 
 
@@ -557,6 +620,24 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
     elif name == "splunk_health":
         result = await _do_health()
+    elif name == "splunk_search_passed":
+        result = await _do_search_passed(
+            arguments.get("earliest", "-1h"),
+            arguments.get("latest", "now"),
+        )
+    elif name == "splunk_ingest_disposition":
+        result = await _do_ingest_disposition(
+            arguments.get("event_id", ""),
+            arguments.get("disposition_id", ""),
+            arguments.get("status", "observed"),
+            arguments.get("mode", "observe"),
+            arguments.get("operator", "admin"),
+            arguments.get("action", ""),
+            arguments.get("command", ""),
+            arguments.get("detail", ""),
+            arguments.get("triggered_rule", ""),
+            arguments.get("risk_level", "medium"),
+        )
     else:
         result = json.dumps({"error": f"Unknown tool: {name}"})
 

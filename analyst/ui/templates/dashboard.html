@@ -155,7 +155,45 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 .confirm-box .btns .ok{background:var(--medium);color:#000;font-weight:bold}
 .confirm-box .btns .cancel{background:var(--bg-card);color:var(--text);border:1px solid var(--border)}
 
-@media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;display:flex;border-right:none;border-bottom:1px solid var(--border);padding:0}.nav-item{flex:1;border-left:none;border-bottom:3px solid transparent;justify-content:center;padding:8px}.nav-item.active{border-left:none;border-bottom-color:var(--neon)}}
+/* Demo walkthrough page */
+.demo-page{display:flex;flex-direction:column;height:100%;gap:8px}
+.demo-controls{background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.demo-btn{font-family:var(--font-mono);font-size:11px;padding:6px 14px;border-radius:4px;cursor:pointer;border:none;font-weight:bold;transition:var(--transition)}
+.demo-btn{background:var(--neon-dim);color:#000}
+.demo-btn:hover{background:var(--neon)}
+.demo-btn:disabled{opacity:.4;cursor:not-allowed}
+#btnRunAll{background:var(--bg-card);color:var(--text);border:1px solid var(--border)}
+#btnRunAll:hover{border-color:var(--neon-dim)}
+.demo-progress{display:flex;gap:4px;padding:0 4px}
+.demo-progress-step{flex:1;height:4px;background:var(--border);border-radius:2px;transition:var(--transition)}
+.demo-progress-step.done{background:var(--neon-dim)}
+.demo-progress-step.active{background:var(--neon);box-shadow:0 0 8px var(--neon)}
+.demo-main{flex:1;display:flex;gap:10px;overflow:hidden}
+.demo-left{flex:1;overflow-y:auto;padding-right:4px}
+.demo-right{width:380px;flex-shrink:0;overflow-y:auto;background:var(--bg-side);border:1px solid var(--border);border-radius:6px;padding:10px}
+.demo-step-card{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:6px;animation:slideIn .3s ease-out}
+.demo-step-card .step-title{font-family:var(--font-mono);font-size:12px;color:var(--neon);margin-bottom:4px}
+.demo-step-card .step-desc{font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:6px}
+.demo-event-row{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;margin-bottom:3px;font-size:11px;animation:fadeIn .5s ease-out}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.demo-event-row.blocked{border-left:3px solid var(--critical)}
+.demo-event-row.passed{border-left:3px solid var(--neon)}
+.demo-event-row .ev-id{font-family:var(--font-mono);font-size:10px;color:var(--text-dim);min-width:90px}
+.demo-event-row .ev-label{flex:1;font-size:11px}
+.demo-event-row .ev-sev{font-family:var(--font-mono);font-size:9px;padding:1px 6px;border-radius:3px}
+.demo-gw-entry{background:#0a0f0a;border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;font-size:10px;font-family:var(--font-mono);animation:fadeIn .5s ease-out}
+.demo-gw-entry .gw-label{color:var(--neon);font-size:9px;margin-bottom:3px}
+.demo-gw-entry .gw-request{color:var(--blue);margin-bottom:2px}
+.demo-gw-entry .gw-response{color:var(--neon-dim)}
+.demo-gw-entry .gw-status{color:var(--medium);margin-bottom:2px}
+.demo-summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.demo-summary-card{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.demo-summary-card .sv{font-family:var(--font-mono);font-size:24px;font-weight:bold}
+.demo-summary-card .sl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.demo-flow-arrow{text-align:center;color:var(--neon);font-size:20px;padding:4px 0;animation:pulse 1.5s infinite}
+.empty-hint a{color:var(--neon);cursor:pointer;text-decoration:underline}
+
+@media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;display:flex;border-right:none;border-bottom:1px solid var(--border);padding:0}.nav-item{flex:1;border-left:none;border-bottom:3px solid transparent;justify-content:center;padding:8px}.nav-item.active{border-left:none;border-bottom-color:var(--neon)}.demo-main{flex-direction:column}.demo-right{width:100%}}
 </style>
 </head>
 <body>
@@ -186,8 +224,8 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <div class="nav-item" data-page="disposition" onclick="switchPage('disposition')">
       <span class="icon">📜</span> 处置记录
     </div>
-    <div class="nav-item" data-page="splunk" onclick="switchPage('splunk')">
-      <span class="icon">🗄️</span> Splunk 日志
+    <div class="nav-item" data-page="demo" onclick="switchPage('demo')">
+      <span class="icon">🎬</span> 演示流程
     </div>
   </div>
 
@@ -259,6 +297,65 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
       </div>
     </div>
 
+    <!-- ═══ Page: Demo Walkthrough ═══ -->
+    <div class="page" id="page-demo">
+      <div class="demo-page">
+        <!-- Control bar -->
+        <div class="demo-controls">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-family:var(--font-mono);font-size:13px;color:var(--neon)">🎬 Demo Walkthrough</span>
+            <span style="font-size:10px;color:var(--text-dim)">|</span>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text)">Mode:</span>
+            <select id="demoMode" onchange="demoSetMode(this.value)" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-family:var(--font-mono);font-size:11px">
+              <option value="auto">AUTO — auto-block</option>
+              <option value="observe">OBSERVE — alert only</option>
+            </select>
+            <button class="demo-btn" onclick="demoReset()">🔄 Reset</button>
+            <button class="demo-btn" onclick="demoNextStep()" id="btnNext">▶ Next Step</button>
+            <button class="demo-btn" onclick="demoRunAll()" id="btnRunAll">⏩ Run All</button>
+          </div>
+          <span id="demoStatus" style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">Ready — Click "Next Step" to begin</span>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="demo-progress" id="demoProgress"></div>
+
+        <!-- Main demo area: two columns -->
+        <div class="demo-main">
+          <!-- Left: Steps + events -->
+          <div class="demo-left">
+            <div id="demoStepContent">
+              <div class="empty-hint">Click "Next Step" to walk through the full AI Sentinel flow.</div>
+            </div>
+            <div id="demoEvents"></div>
+          </div>
+          <!-- Right: Gateway interaction + dispositions -->
+          <div class="demo-right">
+            <div class="section-title" style="font-size:11px">🛰 Gateway MCP Interaction</div>
+            <div id="demoGateway" style="min-height:100px">
+              <div class="empty-hint" style="font-size:11px;padding:20px">Waiting for block commands...</div>
+            </div>
+            <div class="section-title" style="font-size:11px;margin-top:10px">📜 Dispositions</div>
+            <div id="demoDispositions" style="min-height:60px">
+              <div class="empty-hint" style="font-size:11px;padding:10px">No dispositions yet</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step detail overlay (for confirm-block in OBSERVE) -->
+        <div id="demoOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideDemoOverlay()">
+          <div class="confirm-box">
+            <div class="title">🛑 Confirm Block (OBSERVE Mode)</div>
+            <div class="msg" id="demoOverlayMsg"></div>
+            <div class="btns">
+              <button class="cancel" onclick="hideDemoOverlay()">Skip</button>
+              <button class="ok" onclick="demoConfirmBlock()">Confirm Block</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══ Page: Disposition ═══ -->
     <div class="page" id="page-disposition">
       <div class="section-title">📜 处置记录 <span id="dispCount" style="font-size:10px;color:var(--text-dim)"></span></div>
@@ -266,40 +363,6 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
         记录每次告警的处置动作、操作人、下发命令及结果。
       </div>
       <div id="dispList"><div class="empty-hint">LOADING...</div></div>
-    </div>
-
-    <!-- ═══ Page: Splunk 原始日志 ═══ -->
-    <div class="page" id="page-splunk">
-      <style>
-        #page-splunk .spl-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
-        #page-splunk .spl-table th,#page-splunk .spl-table td{border:1px solid var(--border,#1a3a2a);padding:4px 8px;text-align:left;vertical-align:top}
-        #page-splunk .spl-table th{background:rgba(0,255,65,.06);color:var(--text-dim);font-weight:600}
-        #page-splunk .spl-table tr:hover td{background:rgba(255,255,255,.03)}
-        #page-splunk .lnk{color:var(--neon,#00ff41);cursor:pointer;text-decoration:underline}
-        #splDetail pre{background:#0a0f0a;border:1px solid var(--border,#1a3a2a);border-radius:6px;padding:10px;font-size:11px;overflow:auto;max-height:320px;color:#c0c8d0}
-      </style>
-      <div class="section-title">🗄️ Splunk 原始日志 <span id="splunkBackend" style="font-size:10px;color:var(--text-dim)"></span></div>
-      <div class="query-input-row" style="gap:6px;flex-wrap:wrap">
-        <input id="splQuery" value='index=*' placeholder='SPL，例: sourcetype="ai_sentinel:gateway" blocked=true' style="flex:1;min-width:300px" onkeydown="if(event.key==='Enter')splunkSearch()">
-        <select id="splTime" style="background:#0d1117;color:#c0c8d0;border:1px solid var(--border,#1a3a2a);border-radius:6px;padding:0 8px">
-          <option value="-15m">近15分钟</option>
-          <option value="-1h">近1小时</option>
-          <option value="-24h" selected>近24小时</option>
-          <option value="-7d">近7天</option>
-          <option value="-30d">近30天</option>
-        </select>
-        <button onclick="splunkSearch()">🔍 查询</button>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">
-        <span style="font-size:10px;color:var(--text-dim);display:flex;align-items:center">快捷:</span>
-        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' blocked=true')">被拦截</button>
-        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' module=skill_scanner')">Skill扫描</button>
-        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' module=disposition')">处置审计</button>
-        <button class="sec-btn" onclick="splPreset('*')">全部</button>
-      </div>
-      <div id="splMeta" style="font-size:11px;color:var(--text-dim);margin:4px 0"></div>
-      <div id="splResults"><div class="empty-hint">◈ 输入 SPL 查询 Splunk 原始日志 ◈</div></div>
-      <div id="splDetail" style="margin-top:8px"></div>
     </div>
   </div>
 </div>
@@ -334,56 +397,7 @@ function switchPage(name){
   if(name==='rules')loadAllRules();
   if(name==='query')loadDemoScenarios();
   if(name==='disposition')loadDispositions();
-  if(name==='splunk'){loadSplunkHealth();if(!_splEvents.length)splunkSearch();}
-}
-
-// ── Splunk 原始日志 ─────────────────────────────────────
-let _splEvents=[];
-function escSpl(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-function splPreset(q){document.getElementById('splQuery').value=q;splunkSearch();}
-function showSplRaw(i){
-  const e=_splEvents[i]||{};
-  document.getElementById('splDetail').innerHTML='<pre>'+escSpl(JSON.stringify(e,null,2))+'</pre>';
-}
-async function loadSplunkHealth(){
-  try{
-    const h=await(await fetch('/api/splunk/health')).json();
-    const b=document.getElementById('splunkBackend');
-    if(h.backend==='real')b.textContent='(🟢 真实 Splunk '+(h.server_name||'')+' '+(h.version||'')+')';
-    else if(h.backend==='simulated')b.textContent='(🟡 模拟数据 · 设 SPLUNK_USE_REAL=true 接真实 Splunk)';
-    else b.textContent='(⚪ '+(h.backend||'不可用')+')';
-  }catch(e){}
-}
-async function splunkSearch(){
-  const q=document.getElementById('splQuery').value.trim()||'*';
-  const t=document.getElementById('splTime').value;
-  const box=document.getElementById('splResults'),meta=document.getElementById('splMeta');
-  document.getElementById('splDetail').innerHTML='';
-  box.innerHTML='<div class="empty-hint">查询中…</div>';
-  try{
-    const r=await(await fetch('/api/splunk/search',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({query:q,earliest:t,latest:'now'})})).json();
-    _splEvents=r.events||[];
-    meta.textContent='后端: '+(r.backend||'?')+' · 命中 '+(r.total||0)+' 条'
-      +(r.truncated?' (显示前 '+_splEvents.length+')':'')+(r.note?' · '+r.note:'');
-    if(!_splEvents.length){box.innerHTML='<div class="empty-hint">无匹配日志</div>';return;}
-    let h='<table class="spl-table"><thead><tr><th>时间</th><th>module</th><th>blocked</th><th>risk</th><th>规则</th><th>agent</th><th>raw</th></tr></thead><tbody>';
-    const gv=(e,k)=>e[k]!=null?e[k]:e['event.'+k];   // 兼容真实 Splunk 的 event.* 嵌套字段
-    _splEvents.forEach((e,i)=>{
-      let f=gv(e,'findings');f=(Array.isArray(f)&&f[0])||{};
-      const blk=gv(e,'blocked');
-      h+='<tr>'
-        +'<td>'+escSpl(String(e.timestamp||e._time||gv(e,'timestamp')||'').slice(0,19))+'</td>'
-        +'<td>'+escSpl(gv(e,'module')||'')+'</td>'
-        +'<td>'+((blk===true||blk==='true')?'<span style="color:var(--danger,#ff3860)">true</span>':(blk!=null?'false':''))+'</td>'
-        +'<td>'+escSpl(gv(e,'risk_score')!=null?gv(e,'risk_score'):'')+'</td>'
-        +'<td>'+escSpl(f.rule_hit||'')+'</td>'
-        +'<td>'+escSpl(gv(e,'agent_id')||'')+'</td>'
-        +'<td><span class="lnk" onclick="showSplRaw('+i+')">查看</span></td>'
-      +'</tr>';
-    });
-    box.innerHTML=h+'</tbody></table>';
-  }catch(e){box.innerHTML='<div class="empty-hint">查询失败: '+escSpl(e)+'</div>';}
+  if(name==='demo'){demoReset();renderDemoProgress(0);}
 }
 
 // ── Stats ──────────────────────────────────────────────
@@ -697,6 +711,260 @@ async function loadDispositions(){
       },200);
     }
   }catch(e){c.innerHTML='<div class="empty-hint">Error: '+esc(e.message)+'</div>'}
+}
+
+// ── Demo Walkthrough ──────────────────────────────────
+let _demoState=null,_demoEid=0,_demoPendAlerts=[];
+
+function demoReset(){
+  fetch('/api/demo/reset',{method:'POST'}).then(r=>r.json()).then(s=>{
+    _demoState=s;_demoPendAlerts=[];
+    document.getElementById('demoStepContent').innerHTML='<div class="empty-hint">Demo reset — click "Next Step" to begin</div>';
+    document.getElementById('demoEvents').innerHTML='';
+    document.getElementById('demoGateway').innerHTML='<div class="empty-hint" style="font-size:11px;padding:20px">Waiting for block commands...</div>';
+    document.getElementById('demoDispositions').innerHTML='<div class="empty-hint" style="font-size:11px;padding:10px">No dispositions yet</div>';
+    document.getElementById('demoStatus').textContent='Ready — 6 steps available';
+    document.getElementById('btnNext').disabled=false;
+    document.getElementById('btnRunAll').disabled=false;
+    renderDemoProgress(0);
+    loadStats();
+  });
+}
+
+function demoSetMode(m){
+  fetch('/api/demo/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({step:0,mode:m})}).catch(()=>{});
+}
+
+function demoNextStep(){
+  const cur=_demoState?._demoState?.current_step||_demoState?.current_step||0;
+  const next=cur+1;
+  if(next>6){demoReset();return}
+  const mode=document.getElementById('demoMode').value;
+  document.getElementById('btnNext').disabled=true;
+  document.getElementById('demoStatus').textContent='Processing step '+next+'...';
+  fetch('/api/demo/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({step:next,mode:mode})})
+    .then(r=>r.json()).then(s=>{
+      if(!s.success){document.getElementById('demoStatus').textContent='Error: '+(s.error||'unknown');document.getElementById('btnNext').disabled=false;return}
+      _demoState=s;
+      if(s.step_key==='generate')renderDemoGenerate(s.result);
+      else if(s.step_key==='splunk')renderDemoSplunk(s.result);
+      else if(s.step_key==='ingest')renderDemoIngest(s.result);
+      else if(s.step_key==='block')renderDemoBlock(s.result);
+      else if(s.step_key==='gateway')renderDemoGatewayStep(s.result);
+      else if(s.step_key==='summary')renderDemoSummary(s.result);
+      renderDemoProgress(s.step);
+      document.getElementById('demoStatus').textContent='Step '+s.step+'/6 complete — '+(s.step_title||'');
+      if(s.step>=6){document.getElementById('btnNext').textContent='🔄 Restart';document.getElementById('btnNext').disabled=false}
+      else{document.getElementById('btnNext').disabled=false}
+      document.getElementById('btnNext').focus();
+    }).catch(e=>{
+      document.getElementById('demoStatus').textContent='Error: '+e.message;
+      document.getElementById('btnNext').disabled=false;
+    });
+}
+
+function demoRunAll(){
+  if(!confirm('Run all 6 demo steps in '+document.getElementById('demoMode').value.toUpperCase()+' mode?'))return;
+  document.getElementById('btnNext').disabled=true;
+  document.getElementById('btnRunAll').disabled=true;
+  document.getElementById('demoStatus').textContent='Running all steps...';
+  const mode=document.getElementById('demoMode').value;
+  fetch('/api/demo/run-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})})
+    .then(r=>r.json()).then(s=>{
+      if(!s.success){document.getElementById('demoStatus').textContent='Error';return}
+      // Render all steps
+      (s.results||[]).forEach(r=>{
+        if(!r.success)return;
+        if(r.step_key==='generate')renderDemoGenerate(r.result);
+        else if(r.step_key==='splunk')renderDemoSplunk(r.result);
+        else if(r.step_key==='ingest')renderDemoIngest(r.result);
+        else if(r.step_key==='block')renderDemoBlock(r.result);
+        else if(r.step_key==='gateway')renderDemoGatewayStep(r.result);
+        else if(r.step_key==='summary')renderDemoSummary(r.result);
+      });
+      if(s.final_state){
+        _demoState={_demoState:s.final_state};
+        renderDemoProgress(6);
+      }
+      document.getElementById('demoStatus').textContent='All 6 steps complete in '+mode.toUpperCase()+' mode!';
+      document.getElementById('btnNext').textContent='🔄 Restart';
+      document.getElementById('btnNext').disabled=false;
+      document.getElementById('btnRunAll').disabled=false;
+    }).catch(e=>{
+      document.getElementById('demoStatus').textContent='Error: '+e.message;
+      document.getElementById('btnNext').disabled=false;
+      document.getElementById('btnRunAll').disabled=false;
+    });
+}
+
+function renderDemoProgress(cur){
+  const total=6;
+  let html='';
+  for(let i=1;i<=total;i++){
+    html+='<div class="demo-progress-step'+(i<=cur?' done':'')+(i===cur?' active':'')+'"></div>';
+  }
+  html+='<span style="font-family:var(--font-mono);font-size:10px;color:var(--text-dim);min-width:30px;text-align:right">'+cur+'/'+total+'</span>';
+  document.getElementById('demoProgress').innerHTML=html;
+}
+
+function renderDemoGenerate(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 1: CRM Agent Generates Events</div>';
+  h+='<div class="step-desc">'+esc(r.summary)+'</div></div>';
+  h+='<div class="demo-flow-arrow">[ Gateway Detection Middlewares ]</div>';
+  let eh='';
+  (r.events||[]).forEach((ev,i)=>{
+    const cls=ev.blocked?'blocked':'passed';
+    const sev=ev.blocked&&ev.risk_score>=90?'critical':ev.blocked?'high':ev.risk_score>0?'medium':'benign';
+    const sevColor=sev==='critical'?'var(--critical)':sev==='high'?'var(--high)':sev==='medium'?'var(--medium)':'var(--neon)';
+    const lbl=ev._label||ev.user_input;
+    eh+='<div class="demo-event-row '+cls+'" style="animation-delay:'+(i*0.1)+'s">';
+    eh+='<span class="ev-id">'+esc(ev.event_id)+'</span>';
+    eh+='<span class="ev-label">'+esc(lbl).substring(0,70)+'</span>';
+    eh+='<span class="ev-sev" style="color:'+sevColor+';background:'+sevColor+'22;border:1px solid '+sevColor+'44">'+(ev.blocked?'BLOCKED':'PASSED')+'</span>';
+    eh+='</div>';
+  });
+  document.getElementById('demoStepContent').innerHTML=h;
+  document.getElementById('demoEvents').innerHTML=eh;
+}
+
+function renderDemoSplunk(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 2: Events Ship to Splunk HEC</div>';
+  h+='<div class="step-desc">Gateway async ships SecurityEvent JSON to Splunk HEC endpoint.</div>';
+  h+='<div class="info-grid"><div class="info-card"><div class="info-label">HEC Endpoint</div><div class="info-value">'+esc(r.hec_endpoint)+'</div></div>';
+  h+='<div class="info-card"><div class="info-label">Index</div><div class="info-value">'+esc(r.index)+' ('+esc(r.backend)+')</div></div></div>';
+  h+='<div style="margin-top:6px;font-size:11px;color:var(--neon)">'+r.events_shipped+'/'+r.events_indexed+' events shipped & indexed</div>';
+  h+='</div><div class="demo-flow-arrow">[ Splunk HEC -> index: gateway_events ]</div>';
+  document.getElementById('demoStepContent').innerHTML+=h;
+}
+
+function renderDemoIngest(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 3: Analyst Ingests & Matches Rules</div>';
+  h+='<div class="step-desc">Analyst fetches events via Splunk MCP. Rule Engine matches findings against rules.yaml.</div>';
+  h+='<div style="font-size:11px;color:var(--neon);margin-bottom:6px">'+esc(r.summary)+'</div>';
+  (r.alerts||[]).forEach(a=>{
+    const rules=(a.rule_matches||[]).map(m=>m.rule_id+' '+esc(m.rule_name)).join(', ');
+    h+='<div class="info-card" style="font-size:11px;margin-bottom:4px">';
+    h+='<b>'+esc(a.alert_id)+'</b> — '+esc(a.event_id);
+    h+='<div style="color:var(--text-dim);font-size:10px">Rules: '+esc(rules)+' | Action: '+(a.pending_block?'block pending':'alert')+'</div>';
+    h+='</div>';
+  });
+  h+='</div><div class="demo-flow-arrow">[ Rule Engine -> Alerts Generated ]</div>';
+  document.getElementById('demoStepContent').innerHTML+=h;
+}
+
+function renderDemoBlock(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 4: Mode Decision & Block</div>';
+  h+='<div class="step-desc">'+esc(r.summary)+'</div>';
+  if(r.mode==='auto'){(r.auto_blocked||[]).forEach(b=>{
+    h+='<div class="demo-event-row blocked"><span class="ev-id">'+esc(b.alert_id)+'</span><span class="ev-label">Auto-blocked: '+esc(b.triggered_rule)+'</span><span class="ev-sev" style="color:var(--critical);background:#ff004022">OPERATOR: auto</span></div>';
+  })}
+  if(r.mode==='observe'&&(r.pending_confirmation||[]).length>0){
+    _demoPendAlerts=r.pending_confirmation;
+    h+='<div class="demo-event-row" style="border-left:3px solid var(--medium)"><span class="ev-label" style="color:var(--medium)">'+r.pending_confirmation.length+' alert(s) pending operator confirmation</span></div>';
+    h+='<div style="margin-top:8px"><button class="block-btn" onclick="showDemoConfirm()" style="font-size:11px;padding:6px 18px">Confirm Block</button></div>';
+  }
+  h+='</div><div class="demo-flow-arrow">[ '+r.mode.toUpperCase()+' Mode Decision ]</div>';
+  document.getElementById('demoStepContent').innerHTML+=h;
+}
+
+function renderDemoGatewayStep(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 5: Gateway Executes Block</div>';
+  h+='<div class="step-desc">Gateway MCP sends block command. POST /bans records the ban.</div>';
+  h+='<div class="info-card"><div class="info-label">Gateway URL</div><div class="info-value">'+esc(r.gateway_url)+'</div></div>';
+  h+='<div style="font-size:11px;color:var(--neon);margin-top:4px">'+r.blocks_issued+' block(s) issued</div>';
+  h+='</div>';
+  document.getElementById('demoStepContent').innerHTML+=h;
+
+  // Render gateway logs
+  let gh='';
+  (r.gateway_logs||[]).forEach(g=>{
+    gh+='<div class="demo-gw-entry">';
+    gh+='<div class="gw-label">['+esc((g.timestamp||'').substring(11,19))+'] '+esc(g.trigger||'')+'</div>';
+    gh+='<div class="gw-request">'+esc(g.request?.method||'POST')+' '+esc(g.request?.endpoint||'/bans')+' '+esc(JSON.stringify(g.request?.payload||{}))+'</div>';
+    gh+='<div class="gw-status">Response: '+esc(g.response?.status_code||200)+' — '+esc(JSON.stringify(g.response?.body||{}))+'</div>';
+    gh+='<div class="gw-response">Mode: '+esc(g.mode||'')+' | Simulated: true</div>';
+    gh+='</div>';
+  });
+  document.getElementById('demoGateway').innerHTML=gh||'<div class="empty-hint" style="font-size:11px;padding:20px">No blocks executed yet</div>';
+
+  // Render dispositions
+  renderDemoDispositions();
+  loadStats();
+}
+
+function renderDemoSummary(r){
+  let h='<div class="demo-step-card"><div class="step-title">Step 6: Summary</div>';
+  h+='<div class="step-desc">'+esc(r.message)+'</div>';
+  const s=r.final_stats||{};
+  h+='<div class="demo-summary-grid">';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--neon)">'+(s.total_events||0)+'</div><div class="sl">Total Events</div></div>';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--critical)">'+(s.blocked_events||0)+'</div><div class="sl">Blocked</div></div>';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--neon)">'+(s.passed_events||0)+'</div><div class="sl">Passed</div></div>';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--blue)">'+(s.total_alerts||0)+'</div><div class="sl">Alerts</div></div>';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--medium)">'+(s.total_dispositions||0)+'</div><div class="sl">Dispositions</div></div>';
+  h+='<div class="demo-summary-card"><div class="sv" style="color:var(--neon)">'+(s.completed_steps||0)+'</div><div class="sl">Steps Done</div></div>';
+  h+='</div></div>';
+  document.getElementById('demoStepContent').innerHTML+=h;
+  renderDemoDispositions();
+  loadStats();
+}
+
+function renderDemoDispositions(){
+  fetch('/api/demo/state').then(r=>r.json()).then(s=>{
+    const disps=s.dispositions||[];
+    if(!disps.length){
+      document.getElementById('demoDispositions').innerHTML='<div class="empty-hint" style="font-size:11px;padding:10px">No dispositions yet</div>';
+      return;
+    }
+    let dh='';
+    disps.forEach(d=>{
+      dh+='<div class="info-card disp-item" style="font-size:11px;margin-bottom:4px">';
+      dh+='<b style="color:'+(d.operator==='auto'?'var(--blue)':'var(--medium)')+'">'+(d.operator==='auto'?'auto':'admin')+'</b> ';
+      dh+='<span style="color:var(--critical)">block</span> — ';
+      dh+=esc(d.event_id)+'<br>';
+      dh+='<span style="font-size:9px;color:var(--text-dim)">'+esc(d.disposition_id)+' | '+esc(d.command||'')+'</span>';
+      dh+='</div>';
+    });
+    document.getElementById('demoDispositions').innerHTML=dh;
+  });
+}
+
+function showDemoConfirm(){
+  if(!_demoPendAlerts.length)return;
+  const a=_demoPendAlerts[0];
+  document.getElementById('demoOverlayMsg').innerHTML=
+    '<b>Alert:</b> '+esc(a.alert_id)+'<br>'+
+    '<b>Event:</b> '+esc(a.event_id)+'<br>'+
+    '<b>Rule:</b> '+esc(a.triggered_rule)+'<br>'+
+    '<b>Risk Level:</b> '+esc(a.risk_level);
+  document.getElementById('demoOverlay').style.display='flex';
+}
+
+function hideDemoOverlay(){
+  document.getElementById('demoOverlay').style.display='none';
+}
+
+function demoConfirmBlock(){
+  if(!_demoPendAlerts.length){hideDemoOverlay();return}
+  const aid=_demoPendAlerts[0].alert_id;
+  hideDemoOverlay();
+  fetch('/api/demo/confirm-block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_id:aid})})
+    .then(r=>r.json()).then(s=>{
+      if(s.success){
+        // Show gateway interaction
+        let gh=document.getElementById('demoGateway').innerHTML;
+        gh+='<div class="demo-gw-entry">';
+        gh+='<div class="gw-label">[Operator Confirmed] '+esc(s.message)+'</div>';
+        gh+='<div class="gw-request">'+esc(s.gateway_request?.method||'POST')+' '+esc(s.gateway_request?.endpoint||'/bans')+' '+esc(JSON.stringify(s.gateway_request?.payload||{}))+'</div>';
+        gh+='<div class="gw-response">Response: 200 — '+esc(JSON.stringify(s.gateway_response?.body||{}))+'</div>';
+        gh+='</div>';
+        document.getElementById('demoGateway').innerHTML=gh;
+        renderDemoDispositions();
+        _demoPendAlerts.shift();
+      }else{
+        alert('Block failed: '+(s.error||''));
+      }
+    });
 }
 
 // ── Mode ──────────────────────────────────────────────
