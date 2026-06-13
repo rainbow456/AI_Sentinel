@@ -1,48 +1,74 @@
 # ============================================================================
-#  AI Sentinel — 一键启动全部服务
-#  用法：
-#    .\start_all.ps1                  # 启动 Gateway + Analyst UI + CMS Agent(网页)
-#    .\start_all.ps1 -Gateway         # 仅启动 Gateway (:3001)
-#    .\start_all.ps1 -Analyst         # 仅启动 Analyst UI (:5000)
-#    .\start_all.ps1 -CmsAgent        # 仅启动 CMS Agent 命令行 (:6000)
-#    .\start_all.ps1 -CmsAgent -Web   # CMS Agent 网页模式 (:6001)
-#    .\start_all.ps1 -All             # 全部服务（默认行为）
+#  AI Sentinel — One-Click Real Splunk Pipeline
+#
+#  Flow:
+#    1. Gateway (:3001) — Detection + Splunk HEC emission
+#    2. CRM Agent Web (:6001) — Monitored "victim" agent
+#    3. Traffic Generator — Attack + Normal traffic → Gateway → Splunk
+#    4. Analyst (:5000) — Polls Splunk, generates alerts, mode/block
+#
+#  Prerequisites:
+#    - Splunk Enterprise running on localhost:8089 (REST) + :8088 (HEC)
+#    - Python 3.12+ with dependencies installed
+#
+#  Usage:
+#    .\start_all.ps1                  # Full pipeline (all services)
+#    .\start_all.ps1 -Gateway         # Gateway only
+#    .\start_all.ps1 -Analyst         # Analyst only
+#    .\start_all.ps1 -CrmAgent        # CRM Agent only
+#    .\start_all.ps1 -Traffic         # Traffic Generator only
+#    .\start_all.ps1 -Web             # CRM Agent in web mode
 # ============================================================================
 param(
     [switch]$Gateway,
     [switch]$Analyst,
-    [switch]$CmsAgent,
-    [switch]$Web,
-    [switch]$All
+    [switch]$CrmAgent,
+    [switch]$Traffic,
+    [switch]$All,
+    [switch]$Web
 )
 
-# 如果没指定任何开关，默认启动全部
-if (-not $Gateway -and -not $Analyst -and -not $CmsAgent) { $All = $true }
-if ($All) { $Gateway = $true; $Analyst = $true; $CmsAgent = $true }
+# Default: start everything
+if (-not $Gateway -and -not $Analyst -and -not $CrmAgent -and -not $Traffic) { $All = $true }
+if ($All) { $Gateway = $true; $Analyst = $true; $CrmAgent = $true; $Traffic = $true }
 
-$ProjectRoot = $PSScriptRoot
-$GateWayDir  = $ProjectRoot
-$AnalystDir  = $ProjectRoot
-$CmsAgentDir = Join-Path $ProjectRoot "cms_agent"
+$ProjectRoot  = $PSScriptRoot
+$CmsAgentDir  = Join-Path $ProjectRoot "cms_agent"
 
-# ── Splunk / HEC 配置 ───────────────────────────────────────────────────
-$env:SPLUNK_HEC_URL   = "http://localhost:8088/services/collector"
-$env:SPLUNK_HEC_TOKEN = "b122039b-c1bd-40ca-a16e-9873126b70a3"
+# ═══════════════════════════════════════════════════════════════════════════
+# Environment Variables — Real Splunk Pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+# --- Splunk HEC (Gateway writes events here) ---
+$env:SPLUNK_HEC_URL    = "https://localhost:8088/services/collector"
+$env:SPLUNK_HEC_TOKEN  = "b122039b-c1bd-40ca-a16e-9873126b70a3"
 $env:SPLUNK_HEC_VERIFY = "0"
-$env:GATEWAY_ID = "gateway-01"
-$env:LLM_PROVIDER = "anthropic"
-$env:NO_PROXY = "localhost,127.0.0.1"
 
-# Analyst Splunk 搜索配置 (localhost:8000, admin/hero54110)
-$env:SPLUNK_HOST = "localhost"
-$env:SPLUNK_PORT = "8000"
-$env:SPLUNK_USERNAME = "admin"
-$env:SPLUNK_PASSWORD = "hero54110"
-$env:SPLUNK_USE_REAL = "false"
-$env:SPLUNK_USE_SSL = "false"
+# --- Splunk REST API (Analyst reads from here) ---
+$env:SPLUNK_HOST       = "localhost"
+$env:SPLUNK_PORT       = "8089"
+$env:SPLUNK_USERNAME   = "admin"
+$env:SPLUNK_PASSWORD   = "hero54110"
+$env:SPLUNK_USE_REAL   = "true"
+$env:SPLUNK_USE_SSL    = "false"
 $env:SPLUNK_VERIFY_SSL = "false"
+$env:SPLUNK_DEFAULT_EARLIEST = "-30d"
 
-# ── 辅助函数 ─────────────────────────────────────────────────────────────
+# --- Gateway Control (Analyst → Gateway /bans) ---
+$env:GATEWAY_HOST      = "localhost"
+$env:GATEWAY_PORT      = "3001"
+$env:GATEWAY_USE_REAL  = "true"
+$env:GATEWAY_API_KEY   = ""
+
+# --- Generic ---
+$env:GATEWAY_ID         = "gateway-01"
+$env:LLM_PROVIDER       = "anthropic"
+$env:NO_PROXY           = "localhost,127.0.0.1"
+$env:PYTHONUNBUFFERED   = "1"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════════════════
 function Write-Banner($title) {
     Write-Host ""
     Write-Host ("=" * 64) -ForegroundColor Cyan
@@ -56,52 +82,63 @@ function Start-InNewWindow($title, $dir, $command) {
     Write-Host "  [$title] 已在新窗口启动" -ForegroundColor Green
 }
 
-# ── 1) Gateway (:3001) ───────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# 1) Gateway (:3001)
+# ═══════════════════════════════════════════════════════════════════════════
 if ($Gateway) {
-    Write-Banner "1/3 AI Sentinel Gateway (http://localhost:3001)"
-    Start-InNewWindow "Gateway" $GatewayDir "python -u -m gateway.main"
+    Write-Banner "1/4 AI Sentinel Gateway (http://localhost:3001)"
+    Start-InNewWindow "Gateway" $ProjectRoot "python -u -m gateway.main"
     Start-Sleep -Seconds 3
 }
 
-# ── 2) Analyst UI (:5000) ───────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# 2) CRM Agent Web (:6001)
+# ═══════════════════════════════════════════════════════════════════════════
+if ($CrmAgent) {
+    Write-Banner "2/4 CRM Agent — Security Guard Mode (http://127.0.0.1:6001)"
+    $env:GATEWAY_URL     = "http://localhost:3001"
+    $env:SENTINEL_ENABLED = "1"
+    $port = if ($Web) { 6001 } else { 6001 }
+    Write-Host "  [CRM Agent] 网页模式运行在 http://127.0.0.1:${port}" -ForegroundColor Yellow
+    Start-InNewWindow "CRM-Agent" $CmsAgentDir "python crm_secure.py web $port"
+    Start-Sleep -Seconds 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3) Traffic Generator
+# ═══════════════════════════════════════════════════════════════════════════
+if ($Traffic) {
+    Write-Banner "3/4 Traffic Generator (Attack + Normal → Gateway)"
+    Write-Host "  [Traffic] 每 2s 发送一次请求（35% 攻击，持续 120s）" -ForegroundColor Yellow
+    Write-Host "  [Traffic] 若需更长时间，Ctrl+C 后运行: python traffic_generator.py --loop" -ForegroundColor DarkGray
+    Start-InNewWindow "Traffic-Gen" $ProjectRoot "python traffic_generator.py --duration 120 --interval 2.0 --attack-ratio 0.35"
+    Start-Sleep -Seconds 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4) Analyst UI (:5000)
+# ═══════════════════════════════════════════════════════════════════════════
 if ($Analyst) {
-    Write-Banner "2/3 Analyst Command Center (http://localhost:5000)"
-    Start-InNewWindow "Analyst" $AnalystDir "python -u -m analyst.ui.app"
+    Write-Banner "4/4 Analyst Command Center (http://localhost:5000)"
+    Start-InNewWindow "Analyst" $ProjectRoot "python -u -m analyst.ui.app"
     Start-Sleep -Seconds 3
 }
 
-# ── 3) CMS Agent ────────────────────────────────────────────────────────
-if ($CmsAgent) {
-    if ($Web) {
-        $port = 6001
-        Write-Banner "3/3 CMS Agent Web (http://127.0.0.1:${port})"
-        Set-Location $CmsAgentDir
-        Write-Host "  [CMS Agent] 当前窗口启动网页模式 (Ctrl+C 停止)..." -ForegroundColor Yellow
-        $env:GATEWAY_URL = "http://localhost:3001"
-        $env:SENTINEL_ENABLED = "1"
-        python crm_secure.py web $port
-    } else {
-        Write-Banner "3/3 CMS Agent CLI (命令行模式)"
-        Set-Location $CmsAgentDir
-        Write-Host "  [CMS Agent] 当前窗口启动命令行模式 (Ctrl+C 停止)..." -ForegroundColor Yellow
-        $env:GATEWAY_URL = "http://localhost:3001"
-        $env:SENTINEL_ENABLED = "1"
-        python crm_secure.py
-    }
-}
-
-# ── 完成提示 ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# Done
+# ═══════════════════════════════════════════════════════════════════════════
 Write-Host ""
 Write-Host ("=" * 64) -ForegroundColor Cyan
-Write-Host "  所有服务已启动！" -ForegroundColor Green
+Write-Host "  ✅ 所有服务已启动！" -ForegroundColor Green
 Write-Host ("=" * 64) -ForegroundColor Cyan
-Write-Host "  Gateway:    http://localhost:3001/health" -ForegroundColor White
-Write-Host "  Gateway:    http://localhost:3001/docs" -ForegroundColor White
-Write-Host "  Analyst UI: http://localhost:5000" -ForegroundColor White
-if ($CmsAgent -and $Web) {
-    Write-Host "  CMS Agent:  http://127.0.0.1:6001" -ForegroundColor White
-}
+Write-Host "  Gateway:     http://localhost:3001/health" -ForegroundColor White
+Write-Host "  Gateway API: http://localhost:3001/docs" -ForegroundColor White
+Write-Host "  CRM Agent:   http://127.0.0.1:6001" -ForegroundColor White
+Write-Host "  Analyst:     http://localhost:5000" -ForegroundColor White
 Write-Host ""
-Write-Host "  Gateway 和 Analyst 在各自的新窗口中运行。" -ForegroundColor DarkGray
-Write-Host "  关闭那些窗口即可停止对应服务。" -ForegroundColor DarkGray
+Write-Host "  Splunk HEC:  https://localhost:8088/services/collector" -ForegroundColor DarkGray
+Write-Host "  Splunk REST: https://localhost:8089" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Flow: CRM Agent / Traffic Gen → Gateway → Splunk HEC → Analyst" -ForegroundColor DarkGray
+Write-Host "  Each service runs in its own window. Close windows to stop." -ForegroundColor DarkGray
 Write-Host ""
