@@ -244,14 +244,17 @@ def _match_event(event: dict, query: str, start: datetime, end: datetime) -> boo
         ts = ts.replace(tzinfo=start.tzinfo)
     if ts < start or ts > end:
         return False
-    if not query or query.strip() in ("*", "search index=gateway_events"):
+    if not query or query.strip() in ("*", "index=*", "search index=*",
+                                      "search index=gateway_events"):
         return True
     q = query.lower()
     searchable = json.dumps(event, default=str).lower()
     terms = re.findall(r'"([^"]*)"', q)
     extra = [t.strip() for t in re.sub(r'["\']', '', q).split()
              if t.strip() and len(t.strip()) > 2
-             and t.strip() not in ("search", "sort", "by", "the", "and")]
+             and t.strip() not in ("search", "sort", "by", "the", "and")
+             # 索引/源类型是过滤器，不作内容关键词（否则模拟库匹配不到）
+             and not t.strip().startswith(("index=", "sourcetype="))]
     terms.extend(t.lower() for t in extra)
     if not terms:
         return True
@@ -260,53 +263,51 @@ def _match_event(event: dict, query: str, start: datetime, end: datetime) -> boo
 
 # ── Real Splunk query helpers ─────────────────────────────────────────────
 
-def _build_spl_search(query: str, earliest: str, latest: str) -> str:
+def _build_spl_search(query: str, earliest: str = "", latest: str = "") -> str:
     """
-    Build a proper SPL search string for real Splunk.
-    Strips the 'search' prefix if present and wraps as a clean SPL.
+    规整为合法 SPL。时间范围不拼进字符串（拼在 | 之后会破坏 head 等命令），
+    改由 jobs.create 的 earliest_time/latest_time 参数下发。
     """
     q = query.strip()
-    # Remove leading 'search' keyword if present
     if q.lower().startswith("search "):
         q = q[7:].strip()
-    # Default to 'search *' if empty or wildcard
+    # 默认搜全部索引；用户没写 index= 时自动补 index=*，
+    # 否则真实 Splunk 只搜默认索引，sourcetype=... 这类查询会返回空。
     if not q or q == "*":
-        q = "*"
-    # Build the time-bounded SPL
-    time_part = ""
-    if earliest and earliest != "now":
-        time_part = f" earliest={earliest}"
-    if latest and latest != "now":
-        time_part += f" latest={latest}"
-    return f"search {q}{time_part} | sort -_time"
+        q = "index=*"
+    elif not q.startswith("|") and "index=" not in q.lower():
+        q = "index=* " + q
+    if q.startswith("|"):          # 生成型命令（| tstats 等），不加 search 前缀
+        return q
+    return f"search {q}"
 
 
-def _execute_real_search(spl: str, max_results: int = 1000) -> list[dict]:
+def _execute_real_search(spl: str, earliest: str = "-24h", latest: str = "now",
+                         max_results: int = 1000) -> list[dict]:
     """
     Execute a search on real Splunk via splunk-sdk and return parsed events.
+    时间范围作为 job 参数下发，避免拼进 SPL 字符串。
     """
     service = _get_splunk_service()
     if service is None:
         return []
 
     try:
-        from splunklib.results import ResultsReader
-        import xml.etree.ElementTree as ET
+        # 结果用 output_mode="json" 直接解析，无需 ResultsReader
+        # （splunk-sdk 2.x 已移除 ResultsReader，旧导入会让真实搜索整体失败）
 
-        # Create the search job
-        job = service.jobs.create(spl, max_count=max_results)
-
-        # Wait for the job to complete (poll every 1s, max 60s)
-        import time as _time
-        for _ in range(60):
-            if job["isDone"] == "1":
-                break
-            _time.sleep(1)
-
-        # Get results
-        results_stream = job.results(output_mode="json", count=max_results)
-        raw = results_stream.read().decode("utf-8")
-        job.cancel()
+        # oneshot：同步阻塞直到完成并直接返回结果。
+        # 不用 create+轮询：原轮询读 job["isDone"] 不会 refresh，永远是 "0"，
+        # 会干等满 60s 超过桥接超时，导致前端拿不到结果。
+        kw = {"count": max_results, "output_mode": "json"}
+        if earliest:
+            kw["earliest_time"] = earliest
+        if latest:
+            kw["latest_time"] = latest
+        stream = service.jobs.oneshot(spl, **kw)
+        raw = stream.read()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
 
         # Parse JSON results
         results = json.loads(raw)
@@ -342,9 +343,9 @@ async def _do_search(query: str, earliest: str, latest: str) -> str:
         service = _get_splunk_service()
         if service is not None:
             try:
-                spl = _build_spl_search(query, earliest, latest)
-                print(f"[Splunk MCP] Real search: {spl}", file=sys.stderr)
-                events = _execute_real_search(spl)
+                spl = _build_spl_search(query)
+                print(f"[Splunk MCP] Real search: {spl} (earliest={earliest}, latest={latest})", file=sys.stderr)
+                events = _execute_real_search(spl, earliest, latest)
                 if events:
                     return json.dumps({
                         "total": len(events),

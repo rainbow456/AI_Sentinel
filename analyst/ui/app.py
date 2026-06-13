@@ -261,6 +261,50 @@ def upsert_rule():
     return jsonify({"success": ok})
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Splunk 原始日志查询（经 splunk-query MCP，真实 Splunk / 模拟回退）
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/splunk/search", methods=["POST"])
+def splunk_search():
+    """Run an SPL search via the Splunk MCP server; returns raw events."""
+    _init_agent()
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "*").strip()
+    earliest = data.get("earliest", "-24h")
+    latest = data.get("latest", "now")
+    result = _agent._mcp_call(
+        "splunk-query", "splunk_search",
+        {"query": query, "earliest": earliest, "latest": latest},
+        fallback={"total": 0, "events": [], "backend": "unavailable",
+                  "note": "Splunk MCP 未连接（agent MCP 未启用或服务器未就绪）"},
+    )
+    return jsonify(result)
+
+
+@app.route("/api/splunk/health")
+def splunk_health():
+    """Splunk connection health (real / simulated)."""
+    _init_agent()
+    result = _agent._mcp_call(
+        "splunk-query", "splunk_health", {},
+        fallback={"status": "unavailable", "backend": "none",
+                  "note": "Splunk MCP 未连接"},
+    )
+    return jsonify(result)
+
+
+@app.route("/api/splunk/indexes")
+def splunk_indexes():
+    """List Splunk indexes (real / simulated)."""
+    _init_agent()
+    result = _agent._mcp_call(
+        "splunk-query", "splunk_list_indexes", {},
+        fallback={"indexes": []},
+    )
+    return jsonify(result)
+
+
 # ── MCP & LLM status ──────────────────────────────────────────────────────
 
 @app.route("/api/mcp/status")

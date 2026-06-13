@@ -1,0 +1,72 @@
+- action: block
+  description: 检测到注入攻击（SQL/XSS/命令注入）
+  enabled: true
+  name: injection_detected
+  patterns:
+  - sql injection
+  - injection
+  - xss
+  - union select
+  - 1=1
+  - <script>
+  - ../etc/passwd
+  rule_id: R001
+  severity: critical
+- action: block
+  description: 检测到敏感数据泄露
+  enabled: true
+  name: sensitive_data_leak
+  patterns:
+  - password
+  - secret
+  - token
+  - api_key
+  - private key
+  - '-----BEGIN'
+  rule_id: R002
+  severity: critical
+- action: block
+  description: 检测到提示词注入攻击
+  enabled: true
+  name: prompt_injection
+  patterns:
+  - ignore previous
+  - system prompt
+  - you are now
+  - forget all
+  - jailbreak
+  rule_id: R003
+  severity: high
+- action: block
+  description: 检测到Agent间异常协作（共谋）
+  enabled: true
+  forbidden_pairs:
+  - - tech_support
+    - refund
+  name: abnormal_collaboration
+  patterns:
+  - action_confirmation
+  rule_id: R004
+  severity: critical
+- action: alert
+  description: 请求频率异常
+  enabled: true
+  name: rate_limit_exceeded
+  patterns:
+  - rate limit
+  - too many requests
+  - '429'
+  rule_id: R005
+  severity: medium
+- action: block
+  description: 潜在数据外泄
+  enabled: true
+  name: data_exfiltration
+  patterns:
+  - select *
+  - dump
+  - export
+  - download all
+  - bulk extract
+  rule_id: R006
+  severity: high

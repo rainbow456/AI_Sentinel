@@ -22,14 +22,21 @@ _BLOCK_ENTITIES = {
     "CRYPTO",
 }
 
-# ---- Try to load Presidio (heavy dependency; fall back silently on failure) ----
+# ---- Presidio 懒加载：首次 detect 才初始化，import 本模块不触发，避免拖慢启动 ----
 _analyzer = None
-try:
-    from presidio_analyzer import AnalyzerEngine
+_analyzer_ready = False
 
-    _analyzer = AnalyzerEngine()
-except Exception:  # pragma: no cover - fall back when models/deps are missing
-    _analyzer = None
+
+def _get_analyzer():
+    global _analyzer, _analyzer_ready
+    if not _analyzer_ready:
+        _analyzer_ready = True
+        try:
+            from presidio_analyzer import AnalyzerEngine
+            _analyzer = AnalyzerEngine()
+        except Exception:  # pragma: no cover
+            _analyzer = None
+    return _analyzer
 
 
 # ---- Built-in regex used for fallback -------------------------------------
@@ -42,7 +49,7 @@ _FALLBACK_PATTERNS = {
 
 def _detect_by_presidio(prompt: str) -> Dict[str, Any]:
     """Analyze text with Presidio and return the hit result."""
-    results = _analyzer.analyze(text=prompt, language="en")
+    results = _get_analyzer().analyze(text=prompt, language="en")
     hits: List[Dict[str, Any]] = [
         {"type": r.entity_type, "score": round(r.score, 3)}
         for r in results
@@ -76,6 +83,6 @@ def _detect_by_regex(prompt: str) -> Dict[str, Any]:
 
 def detect(prompt: str) -> Dict[str, Any]:
     """Main entry for sensitive information detection."""
-    if _analyzer is not None:
+    if _get_analyzer() is not None:
         return _detect_by_presidio(prompt)
     return _detect_by_regex(prompt)

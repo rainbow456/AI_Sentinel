@@ -186,6 +186,9 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <div class="nav-item" data-page="disposition" onclick="switchPage('disposition')">
       <span class="icon">📜</span> 处置记录
     </div>
+    <div class="nav-item" data-page="splunk" onclick="switchPage('splunk')">
+      <span class="icon">🗄️</span> Splunk 日志
+    </div>
   </div>
 
   <!-- Content -->
@@ -264,6 +267,40 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
       </div>
       <div id="dispList"><div class="empty-hint">LOADING...</div></div>
     </div>
+
+    <!-- ═══ Page: Splunk 原始日志 ═══ -->
+    <div class="page" id="page-splunk">
+      <style>
+        #page-splunk .spl-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+        #page-splunk .spl-table th,#page-splunk .spl-table td{border:1px solid var(--border,#1a3a2a);padding:4px 8px;text-align:left;vertical-align:top}
+        #page-splunk .spl-table th{background:rgba(0,255,65,.06);color:var(--text-dim);font-weight:600}
+        #page-splunk .spl-table tr:hover td{background:rgba(255,255,255,.03)}
+        #page-splunk .lnk{color:var(--neon,#00ff41);cursor:pointer;text-decoration:underline}
+        #splDetail pre{background:#0a0f0a;border:1px solid var(--border,#1a3a2a);border-radius:6px;padding:10px;font-size:11px;overflow:auto;max-height:320px;color:#c0c8d0}
+      </style>
+      <div class="section-title">🗄️ Splunk 原始日志 <span id="splunkBackend" style="font-size:10px;color:var(--text-dim)"></span></div>
+      <div class="query-input-row" style="gap:6px;flex-wrap:wrap">
+        <input id="splQuery" value='index=*' placeholder='SPL，例: sourcetype="ai_sentinel:gateway" blocked=true' style="flex:1;min-width:300px" onkeydown="if(event.key==='Enter')splunkSearch()">
+        <select id="splTime" style="background:#0d1117;color:#c0c8d0;border:1px solid var(--border,#1a3a2a);border-radius:6px;padding:0 8px">
+          <option value="-15m">近15分钟</option>
+          <option value="-1h">近1小时</option>
+          <option value="-24h" selected>近24小时</option>
+          <option value="-7d">近7天</option>
+          <option value="-30d">近30天</option>
+        </select>
+        <button onclick="splunkSearch()">🔍 查询</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">
+        <span style="font-size:10px;color:var(--text-dim);display:flex;align-items:center">快捷:</span>
+        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' blocked=true')">被拦截</button>
+        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' module=skill_scanner')">Skill扫描</button>
+        <button class="sec-btn" onclick="splPreset('sourcetype=\'ai_sentinel:gateway\' module=disposition')">处置审计</button>
+        <button class="sec-btn" onclick="splPreset('*')">全部</button>
+      </div>
+      <div id="splMeta" style="font-size:11px;color:var(--text-dim);margin:4px 0"></div>
+      <div id="splResults"><div class="empty-hint">◈ 输入 SPL 查询 Splunk 原始日志 ◈</div></div>
+      <div id="splDetail" style="margin-top:8px"></div>
+    </div>
   </div>
 </div>
 
@@ -297,6 +334,56 @@ function switchPage(name){
   if(name==='rules')loadAllRules();
   if(name==='query')loadDemoScenarios();
   if(name==='disposition')loadDispositions();
+  if(name==='splunk'){loadSplunkHealth();if(!_splEvents.length)splunkSearch();}
+}
+
+// ── Splunk 原始日志 ─────────────────────────────────────
+let _splEvents=[];
+function escSpl(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function splPreset(q){document.getElementById('splQuery').value=q;splunkSearch();}
+function showSplRaw(i){
+  const e=_splEvents[i]||{};
+  document.getElementById('splDetail').innerHTML='<pre>'+escSpl(JSON.stringify(e,null,2))+'</pre>';
+}
+async function loadSplunkHealth(){
+  try{
+    const h=await(await fetch('/api/splunk/health')).json();
+    const b=document.getElementById('splunkBackend');
+    if(h.backend==='real')b.textContent='(🟢 真实 Splunk '+(h.server_name||'')+' '+(h.version||'')+')';
+    else if(h.backend==='simulated')b.textContent='(🟡 模拟数据 · 设 SPLUNK_USE_REAL=true 接真实 Splunk)';
+    else b.textContent='(⚪ '+(h.backend||'不可用')+')';
+  }catch(e){}
+}
+async function splunkSearch(){
+  const q=document.getElementById('splQuery').value.trim()||'*';
+  const t=document.getElementById('splTime').value;
+  const box=document.getElementById('splResults'),meta=document.getElementById('splMeta');
+  document.getElementById('splDetail').innerHTML='';
+  box.innerHTML='<div class="empty-hint">查询中…</div>';
+  try{
+    const r=await(await fetch('/api/splunk/search',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query:q,earliest:t,latest:'now'})})).json();
+    _splEvents=r.events||[];
+    meta.textContent='后端: '+(r.backend||'?')+' · 命中 '+(r.total||0)+' 条'
+      +(r.truncated?' (显示前 '+_splEvents.length+')':'')+(r.note?' · '+r.note:'');
+    if(!_splEvents.length){box.innerHTML='<div class="empty-hint">无匹配日志</div>';return;}
+    let h='<table class="spl-table"><thead><tr><th>时间</th><th>module</th><th>blocked</th><th>risk</th><th>规则</th><th>agent</th><th>raw</th></tr></thead><tbody>';
+    const gv=(e,k)=>e[k]!=null?e[k]:e['event.'+k];   // 兼容真实 Splunk 的 event.* 嵌套字段
+    _splEvents.forEach((e,i)=>{
+      let f=gv(e,'findings');f=(Array.isArray(f)&&f[0])||{};
+      const blk=gv(e,'blocked');
+      h+='<tr>'
+        +'<td>'+escSpl(String(e.timestamp||e._time||gv(e,'timestamp')||'').slice(0,19))+'</td>'
+        +'<td>'+escSpl(gv(e,'module')||'')+'</td>'
+        +'<td>'+((blk===true||blk==='true')?'<span style="color:var(--danger,#ff3860)">true</span>':(blk!=null?'false':''))+'</td>'
+        +'<td>'+escSpl(gv(e,'risk_score')!=null?gv(e,'risk_score'):'')+'</td>'
+        +'<td>'+escSpl(f.rule_hit||'')+'</td>'
+        +'<td>'+escSpl(gv(e,'agent_id')||'')+'</td>'
+        +'<td><span class="lnk" onclick="showSplRaw('+i+')">查看</span></td>'
+      +'</tr>';
+    });
+    box.innerHTML=h+'</tbody></table>';
+  }catch(e){box.innerHTML='<div class="empty-hint">查询失败: '+escSpl(e)+'</div>';}
 }
 
 // ── Stats ──────────────────────────────────────────────
