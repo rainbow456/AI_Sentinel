@@ -14,6 +14,13 @@ Env vars / 环境变量:
 Exposes a global singleton `sender`. / 暴露全局单例 `sender`。
 """
 
+# Load .env before reading env vars (module-scope os.getenv calls in __init__)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import os
 import json
 import uuid

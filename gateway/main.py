@@ -13,6 +13,13 @@ Core capabilities:
 5. Structured (JSON) logging for downstream auditing and alerting
 """
 
+# Load .env before any other imports (env vars must be set before modules are imported)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import os
 import re
 import json

@@ -29,6 +29,13 @@ Custom rules path:
     export RULES_PATH=/path/to/custom/rules.yaml
 """
 
+# Load .env before reading any env vars
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import os
 from dataclasses import dataclass, field
 
@@ -44,6 +51,8 @@ class SplunkConfig:
     password: str = ""                     # Set via SPLUNK_PASSWORD env var
     token: str = ""                        # HEC token (for write-back)
     hec_url: str = "https://localhost:8088/services/collector"
+    hec_token: str = ""                    # HEC token for write-back (distinct from REST token)
+    hec_verify: bool = False               # Verify TLS certificate when posting to HEC
 
     # ── SSL / TLS ───────────────────────────────────────────────────────
     use_ssl: bool = False
@@ -90,6 +99,7 @@ class AppConfig:
     splunk: SplunkConfig = field(default_factory=SplunkConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     rules: RuleEngineConfig = field(default_factory=RuleEngineConfig)
+    poll_interval: int = 10               # Analyst event polling interval in seconds
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -129,6 +139,8 @@ def get_config() -> AppConfig:
         password=_env("SPLUNK_PASSWORD", ""),
         token=_env("SPLUNK_TOKEN", ""),
         hec_url=_env("SPLUNK_HEC_URL", "https://localhost:8088/services/collector"),
+        hec_token=_env("SPLUNK_HEC_TOKEN", ""),
+        hec_verify=_env_bool("SPLUNK_HEC_VERIFY", False),
         use_ssl=_env_bool("SPLUNK_USE_SSL", False),
         verify_ssl=_env_bool("SPLUNK_VERIFY_SSL", False),
         use_real=_env_bool("SPLUNK_USE_REAL", False),
@@ -151,7 +163,10 @@ def get_config() -> AppConfig:
         auto_reload=_env_bool("RULES_AUTO_RELOAD", True),
     )
 
-    return AppConfig(splunk=splunk, gateway=gateway, rules=rules)
+    return AppConfig(
+        splunk=splunk, gateway=gateway, rules=rules,
+        poll_interval=_env_int("POLL_INTERVAL", 10),
+    )
 
 
 # ── Convenience: module-level access (loaded once at import) ──────────────
@@ -200,6 +215,8 @@ def print_config():
     print(f"    username  = {c.splunk.username}")
     print(f"    password  = {'***' if c.splunk.password else '(not set)'}")
     print(f"    token     = {c.splunk.token[:8]}...{'***' if c.splunk.token else '(not set)'}")
+    print(f"    hec_token = {c.splunk.hec_token[:8]}...{'***' if c.splunk.hec_token else '(not set)'}")
+    print(f"    hec_verify= {c.splunk.hec_verify}")
     print(f"    use_real  = {c.splunk.use_real}")
     print(f"    simulated = {not c.splunk.use_real}")
     print(f"  Gateway:")
@@ -209,6 +226,7 @@ def print_config():
     print(f"  Rules:")
     print(f"    path      = {c.rules.rules_path or '(auto)'}")
     print(f"    auto_reload = {c.rules.auto_reload}")
+    print(f"  Poll Interval: {c.poll_interval}s")
     print("═" * 60)
 
 

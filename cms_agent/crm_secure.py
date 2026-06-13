@@ -24,7 +24,7 @@
 
 【运行方式】（与 crm_agent.py 完全一致，只是换成本脚本启动）
     命令行模式：python crm_secure.py
-    网页模式：  python crm_secure.py web          （默认 http://127.0.0.1:6000）
+    网页模式：  python crm_secure.py web          （默认 http://127.0.0.1:6001）
                 python crm_secure.py web 8080     （自定义端口）
 
 【前置】先启动安全网关（默认 http://localhost:3001）：
@@ -37,6 +37,13 @@
     AGENT_ID          默认 "crm-agent-01"
 ================================================================================
 """
+
+# Load .env before reading any env vars (must be before crm_agent import)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import os
 import sys
@@ -240,7 +247,7 @@ if __name__ == "__main__":
     _banner(enabled)
 
     if len(sys.argv) > 1 and sys.argv[1].lower() in ("web", "server", "ui"):
-        port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6000
+        port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6001
         crm_agent.run_web(port=port)
     else:
         crm_agent.CRMAgent().run()

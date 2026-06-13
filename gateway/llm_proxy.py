@@ -11,6 +11,13 @@ LLM 兼容检测代理 / OpenAI-compatible detecting proxy
 上游可选：OPENAI_UPSTREAM_URL / OPENAI_UPSTREAM_KEY；不配则走模拟模式（便于先打通）。
 """
 
+# Load .env before reading env vars at module scope
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import os
 import re
 import time

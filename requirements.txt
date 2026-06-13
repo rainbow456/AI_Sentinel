@@ -3,6 +3,9 @@
 # Analyst dependencies (B module)
 # Shared dependencies
 
+# ── Configuration ────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
 # ── Gateway: Core ───────────────────────────────────────────────────────────
 fastapi>=0.100.0
 uvicorn>=0.22.0

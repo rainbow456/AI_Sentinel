@@ -9,7 +9,7 @@
 
 【运行方式】
     命令行模式：python crm_agent.py
-    网页模式：  python crm_agent.py web        （默认 http://127.0.0.1:6000）
+    网页模式：  python crm_agent.py web        （默认 http://127.0.0.1:6001）
                 python crm_agent.py web 8080   （自定义端口）
 
 两种模式共用同一套数据与业务逻辑。启动后会在脚本所在目录自动创建
@@ -38,6 +38,13 @@ SQLite 数据库文件 crm.db（已存在则复用）。
     CRMAgent        —— 主循环、命令分发、业务逻辑、交互反馈
 ================================================================================
 """
+
+# Load .env before reading any env vars
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import os
 import re
@@ -1623,7 +1630,7 @@ class CRMAgent:
 # ==============================================================================
 # Web 前端：标准库 http.server，提供聊天式交互界面 + /api/command 接口
 # ==============================================================================
-def run_web(host="127.0.0.1", port=6000):
+def run_web(host="127.0.0.1", port=6001):
     """
     启动本地 Web 服务：GET / 返回聊天页面，POST /api/command 执行命令。
     复用 CRMAgent（interactive=False）的全部业务逻辑，结果以 JSON 块返回。
@@ -2028,7 +2035,7 @@ async function uploadSkill(){
 # ==============================================================================
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].lower() in ("web", "server", "ui"):
-        port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6000
+        port = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 6001
         run_web(port=port)
     else:
         CRMAgent().run()

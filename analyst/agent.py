@@ -66,7 +66,7 @@ class SecurityAgent:
         self._llm_config: dict = {}
         # Polling state (replaces _demo_cycle)
         self._poll_thread: threading.Thread | None = None
-        self._poll_interval: int = int(os.getenv("POLL_INTERVAL", "10"))
+        self._poll_interval: int = self._config.poll_interval
         self._last_poll_time: datetime = datetime.now() - timedelta(hours=1)
 
         self._init_mcp()

@@ -19,8 +19,8 @@ $GATEWAY_URL      = "http://localhost:3001"
 $SENTINEL_ENABLED = "1"        # 设 "0" 可关闭守卫
 $CRM_WEB_PORT     = "6001"     # 网页模式(-Web)监听端口
 
-$GatewayDir = "d:\hackathon\AI_Sentinel"
-$AgentDir   = "d:\hackathon\CMS_Agent"
+$GatewayDir = Split-Path $PSScriptRoot -Parent
+$AgentDir   = $PSScriptRoot
 
 # ---------------------------------------------------------------------------
 # 1) 启动网关（新窗口，便于看日志）

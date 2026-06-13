@@ -7,7 +7,7 @@ set "PROJECT_ROOT=%~dp0"
 
 REM --- Splunk HEC (Gateway writes events here) ---
 set "SPLUNK_HEC_URL=https://localhost:8088/services/collector"
-set "SPLUNK_HEC_TOKEN=b122039b-c1bd-40ca-a16e-9873126b70a3"
+set "SPLUNK_HEC_TOKEN=47242114-7008-4bfe-a358-41d4b4d1838e"
 set "SPLUNK_HEC_VERIFY=0"
 
 REM --- Splunk REST API (Analyst reads from here) ---
@@ -32,6 +32,18 @@ set "LLM_PROVIDER=anthropic"
 set "NO_PROXY=localhost,127.0.0.1"
 set "PYTHONUNBUFFERED=1"
 
+REM --- Additional config (matches .env.example) ---
+set "SPLUNK_TOKEN="
+set "SPLUNK_DEFAULT_INDEX=gateway_events"
+set "SPLUNK_MAX_RESULTS=1000"
+set "RULES_PATH="
+set "RULES_AUTO_RELOAD=true"
+set "SPLUNK_HEC_CHANNEL="
+set "OPENAI_UPSTREAM_URL="
+set "OPENAI_UPSTREAM_KEY="
+set "POLL_INTERVAL=10"
+set "SENTINEL_BLOCK_DETECTORS=injection,prompt_injection"
+
 echo ================================================================
 echo   AI Sentinel -- Real Splunk Pipeline
 echo ================================================================
@@ -45,7 +57,7 @@ echo [2/4] Starting CRM Agent Web (http://127.0.0.1:6001) ...
 start "CRM-Agent" /D "%PROJECT_ROOT%cms_agent" cmd /k "set GATEWAY_URL=http://localhost:3001 && set SENTINEL_ENABLED=1 && python crm_secure.py web 6001"
 timeout /t 2 /nobreak >nul
 
-echo [3/4] Starting Traffic Generator ...
+echo [3/4] Starting Traffic Generator (CRM-format via CRM Agent -^> Gateway) ...
 start "Traffic-Gen" /D "%PROJECT_ROOT%" cmd /k "python traffic_generator.py --duration 120 --interval 2.0 --attack-ratio 0.35"
 timeout /t 1 /nobreak >nul
 
@@ -65,7 +77,8 @@ echo.
 echo   Splunk HEC:  https://localhost:8088/services/collector
 echo   Splunk REST: https://localhost:8089
 echo.
-echo   Flow: CRM Agent / Traffic Gen -> Gateway -> Splunk HEC -> Analyst
+echo   Flow: CRM Agent / Traffic Gen -^> Gateway -^> Splunk HEC -^> Analyst
+echo   Traffic Gen sends CRM-format commands to CRM Agent (port 6001)
 echo   Each service runs in its own window. Close windows to stop.
 echo.
 pause

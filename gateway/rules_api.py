@@ -6,6 +6,13 @@
 版本自增并留历史，且把改动审计上报 Splunk（module=rule_admin, handler=external）。
 """
 
+# Load .env before reading env vars at module scope
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import os
 import asyncio
 from typing import Any, Dict, List, Optional

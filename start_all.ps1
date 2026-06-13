@@ -3,8 +3,8 @@
 #
 #  Flow:
 #    1. Gateway (:3001) — Detection + Splunk HEC emission
-#    2. CRM Agent Web (:6001) — Monitored "victim" agent
-#    3. Traffic Generator — Attack + Normal traffic → Gateway → Splunk
+#    2. CRM Agent Web (:6001) — Monitored "victim" agent (routes to Gateway internally)
+#    3. Traffic Generator — CRM-format commands → CRM Agent → Gateway → Splunk
 #    4. Analyst (:5000) — Polls Splunk, generates alerts, mode/block
 #
 #  Prerequisites:
@@ -41,7 +41,7 @@ $CmsAgentDir  = Join-Path $ProjectRoot "cms_agent"
 
 # --- Splunk HEC (Gateway writes events here) ---
 $env:SPLUNK_HEC_URL    = "https://localhost:8088/services/collector"
-$env:SPLUNK_HEC_TOKEN  = "b122039b-c1bd-40ca-a16e-9873126b70a3"
+$env:SPLUNK_HEC_TOKEN  = "47242114-7008-4bfe-a358-41d4b4d1838e"
 $env:SPLUNK_HEC_VERIFY = "0"
 
 # --- Splunk REST API (Analyst reads from here) ---
@@ -65,6 +65,18 @@ $env:GATEWAY_ID         = "gateway-01"
 $env:LLM_PROVIDER       = "anthropic"
 $env:NO_PROXY           = "localhost,127.0.0.1"
 $env:PYTHONUNBUFFERED   = "1"
+
+# --- Additional defaults (matches .env.example) ---
+$env:SPLUNK_TOKEN              = ""
+$env:SPLUNK_DEFAULT_INDEX      = "gateway_events"
+$env:SPLUNK_MAX_RESULTS        = "1000"
+$env:SPLUNK_HEC_CHANNEL        = ""
+$env:OPENAI_UPSTREAM_URL       = ""
+$env:OPENAI_UPSTREAM_KEY       = ""
+$env:RULES_PATH                = ""
+$env:RULES_AUTO_RELOAD         = "true"
+$env:POLL_INTERVAL             = "10"
+$env:SENTINEL_BLOCK_DETECTORS  = "injection,prompt_injection"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Helper Functions
@@ -108,8 +120,9 @@ if ($CrmAgent) {
 # 3) Traffic Generator
 # ═══════════════════════════════════════════════════════════════════════════
 if ($Traffic) {
-    Write-Banner "3/4 Traffic Generator (Attack + Normal → Gateway)"
-    Write-Host "  [Traffic] 每 2s 发送一次请求（35% 攻击，持续 120s）" -ForegroundColor Yellow
+    Write-Banner "3/4 Traffic Generator (CRM-format → CRM Agent → Gateway)"
+    Write-Host "  [Traffic] 每 2s 发送一次 CRM 命令（35% 含攻击载荷）" -ForegroundColor Yellow
+    Write-Host "  [Traffic] 流量路径: 流量生成器 → CRM Agent(:6001) → Gateway(:3001) → Splunk HEC" -ForegroundColor DarkGray
     Write-Host "  [Traffic] 若需更长时间，Ctrl+C 后运行: python traffic_generator.py --loop" -ForegroundColor DarkGray
     Start-InNewWindow "Traffic-Gen" $ProjectRoot "python traffic_generator.py --duration 120 --interval 2.0 --attack-ratio 0.35"
     Start-Sleep -Seconds 1
@@ -140,5 +153,6 @@ Write-Host "  Splunk HEC:  https://localhost:8088/services/collector" -Foregroun
 Write-Host "  Splunk REST: https://localhost:8089" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Flow: CRM Agent / Traffic Gen → Gateway → Splunk HEC → Analyst" -ForegroundColor DarkGray
+Write-Host "  Traffic Gen sends CRM-format commands → CRM Agent(:6001) routes to Gateway(:3001)" -ForegroundColor DarkGray
 Write-Host "  Each service runs in its own window. Close windows to stop." -ForegroundColor DarkGray
 Write-Host ""

@@ -97,11 +97,12 @@ def _get_splunk_service():
         return None
 
 
-# ── HEC configuration (for write-back) ────────────────────────────────────────
+# ── HEC configuration (for write-back) — reads from centralized config ──────────
 
-_HEC_URL = os.getenv("SPLUNK_HEC_URL", "https://localhost:8088/services/collector")
-_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "")
-_HEC_VERIFY = os.getenv("SPLUNK_HEC_VERIFY", "0") not in ("0", "false", "False")
+def _get_hec_config():
+    """Return (hec_url, hec_token, hec_verify) from centralized config."""
+    cfg = get_config().splunk
+    return cfg.hec_url, cfg.hec_token, cfg.hec_verify
 
 
 def _send_to_hec(event_payload: dict) -> bool:
@@ -109,7 +110,8 @@ def _send_to_hec(event_payload: dict) -> bool:
     Send an event to Splunk HEC (HTTP Event Collector).
     Returns True on success, False on failure (fail-soft).
     """
-    if not _HEC_URL or not _HEC_TOKEN:
+    hec_url, hec_token, hec_verify = _get_hec_config()
+    if not hec_url or not hec_token:
         return False
     try:
         import urllib.request
@@ -119,10 +121,10 @@ def _send_to_hec(event_payload: dict) -> bool:
             "event": event_payload,
         }, ensure_ascii=False, default=str).encode("utf-8")
         req = urllib.request.Request(
-            _HEC_URL,
+            hec_url,
             data=data,
             headers={
-                "Authorization": f"Splunk {_HEC_TOKEN}",
+                "Authorization": f"Splunk {hec_token}",
                 "Content-Type": "application/json",
             },
             method="POST",
