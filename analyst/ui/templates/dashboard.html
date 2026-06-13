@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S.E.C. v3 — Security Event Command</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-deep:#060608;--bg-panel:#0d1117;--bg-card:#111922;--bg-side:#0a0c10;
+  --border:#1a3a2a;--border-active:#00ff4133;--neon:#00ff41;--neon-dim:#00cc33;
+  --neon-glow:0 0 12px #00ff4144;--text:#c0c8d0;--text-dim:#5a6470;--text-bright:#e8f0e8;
+  --critical:#ff0040;--high:#ff5500;--medium:#ffcc00;--low:#00ff41;
+  --blue:#00ccff;--font-mono:'Share Tech Mono','Courier New',monospace;
+  --font-ui:'Segoe UI',system-ui,sans-serif;--transition:0.3s cubic-bezier(0.4,0,0.2,1);
+  --sidebar-w:180px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg-deep);color:var(--text);font-family:var(--font-ui);min-height:100vh;overflow:hidden}
+body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,65,0.015) 2px,rgba(0,255,65,0.015) 4px);
+  pointer-events:none;z-index:9999}
+
+/* Header */
+.header{background:var(--bg-panel);border-bottom:1px solid var(--border);padding:8px 16px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;z-index:100;position:relative}
+.header-left{display:flex;align-items:center;gap:10px}
+.logo{font-family:var(--font-mono);font-size:15px;color:var(--neon);letter-spacing:2px}
+.logo span{color:var(--text-dim);font-size:10px}
+.mode-group{display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.mode-btn{padding:5px 14px;font-family:var(--font-mono);font-size:11px;cursor:pointer;
+  background:var(--bg-card);color:var(--text-dim);border:none;transition:var(--transition)}
+.mode-btn.active{background:#0a2a0a;color:var(--neon);box-shadow:inset 0 0 8px #00ff4122}
+.mode-btn:hover:not(.active){color:var(--text)}
+.status{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10px;color:var(--neon)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--neon);box-shadow:0 0 6px var(--neon);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* Sidebar + Layout */
+.app{display:flex;height:calc(100vh - 52px)}
+.sidebar{width:var(--sidebar-w);background:var(--bg-side);border-right:1px solid var(--border);padding:8px 0;flex-shrink:0}
+.nav-item{padding:10px 16px;font-family:var(--font-mono);font-size:12px;cursor:pointer;
+  color:var(--text-dim);transition:var(--transition);border-left:3px solid transparent;display:flex;align-items:center;gap:8px}
+.nav-item:hover{color:var(--text);background:rgba(0,255,65,0.03)}
+.nav-item.active{color:var(--neon);border-left-color:var(--neon);background:rgba(0,255,65,0.06)}
+.nav-item .icon{font-size:14px}
+.content{flex:1;overflow:hidden;display:flex;flex-direction:column}
+
+/* Stats */
+.stats-bar{display:flex;gap:6px;padding:6px 12px;background:var(--bg-panel);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.st{background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:4px 10px;min-width:60px}
+.st-l{font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.st-v{font-family:var(--font-mono);font-size:17px;font-weight:bold}
+.st-v.c{color:var(--critical)}.st-v.g{color:var(--neon)}.st-v.b{color:var(--blue)}
+.st-v.y{color:var(--medium)}
+
+/* Pages */
+.page{display:none;height:100%;overflow-y:auto;padding:10px}.page.active{display:block}
+.page::-webkit-scrollbar{width:5px}
+.page::-webkit-scrollbar-track{background:var(--bg-deep)}
+.page::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Overview page */
+.overview-main{display:flex;height:calc(100vh - 130px);gap:0}
+.alert-panel{flex:4;overflow-y:auto;padding:4px 8px 8px 4px;border-right:1px solid var(--border)}
+.detail-panel{flex:5;overflow-y:auto;padding:8px 4px 8px 12px}
+.alert-card{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px;
+  margin-bottom:5px;cursor:pointer;transition:var(--transition);animation:slideIn .3s ease-out}
+.alert-card:hover{border-color:var(--border-active);box-shadow:var(--neon-glow)}
+.alert-card.active{border-color:var(--neon-dim);box-shadow:var(--neon-glow)}
+.alert-card.high{border-left:3px solid var(--critical)}.alert-card.medium{border-left:3px solid var(--high)}
+.alert-card.low{border-left:3px solid var(--low)}
+@keyframes slideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.alert-top{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.sev-badge{font-family:var(--font-mono);font-size:9px;padding:1px 6px;border-radius:3px;font-weight:bold}
+.sev-badge.critical,.sev-badge.high{background:#ff004022;color:var(--critical);border:1px solid #ff004044}
+.sev-badge.medium{background:#ff550022;color:var(--high);border:1px solid #ff550044}
+.sev-badge.low{background:#00ff4122;color:var(--low);border:1px solid #00ff4144}
+.alert-title{font-family:var(--font-mono);font-size:12px;color:var(--text-bright);flex:1}
+.alert-meta{display:flex;gap:10px;font-size:10px;color:var(--text-dim)}
+.rule-tags{display:flex;gap:3px;flex-wrap:wrap;margin-top:3px}
+.rule-tag{font-size:9px;padding:1px 5px;border-radius:3px;background:#0a1a2a;color:var(--blue);border:1px solid #00ccff33}
+.rule-tag.block{background:#2a0a0a;color:var(--critical);border-color:#ff004044}
+.pending-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--medium);animation:pulse .6s infinite;margin-right:3px}
+.block-btn{font-family:var(--font-mono);font-size:9px;padding:3px 8px;background:var(--critical);color:#fff;
+  border:none;border-radius:3px;cursor:pointer;margin-top:4px;transition:var(--transition)}
+.block-btn:hover{box-shadow:0 0 10px var(--critical)}
+.section-title{font-family:var(--font-mono);font-size:11px;color:var(--neon);letter-spacing:2px;
+  text-transform:uppercase;margin-bottom:4px;display:flex;justify-content:space-between}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.info-card{background:var(--bg-card);border:1px solid var(--border);border-radius:5px;padding:8px;margin-bottom:4px}
+.info-label{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.info-value{font-family:var(--font-mono);font-size:12px;color:var(--text-bright);word-break:break-all}
+.tree-box{background:#0a0f0f;border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;max-height:300px}
+.tree-box .mermaid{text-align:center}
+.empty-hint{text-align:center;padding:40px 20px;color:var(--text-dim);font-family:var(--font-mono);font-size:13px}
+.disp-item.highlight{border-color:var(--neon);box-shadow:0 0 16px var(--neon-glow);animation:flashHighlight 1.5s ease-out}
+@keyframes flashHighlight{0%{box-shadow:0 0 24px var(--neon);background:rgba(0,255,65,0.08)}100%{box-shadow:0 0 4px var(--neon-glow);background:transparent}}
+.query-result{background:#0a0f0a;border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;max-height:400px;overflow-y:auto;white-space:pre-wrap}
+.query-result.error{border-color:var(--critical)}
+
+/* Rules page */
+.rules-page{display:flex;flex-direction:column;gap:10px;height:100%}
+.rules-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rules-toolbar input{background:var(--bg-card);border:1px solid var(--border);color:var(--text);
+  padding:6px 12px;border-radius:4px;font-family:var(--font-mono);font-size:12px;flex:1;min-width:200px}
+.rules-toolbar input:focus{outline:none;border-color:var(--neon-dim);box-shadow:var(--neon-glow)}
+.rules-toolbar button{background:var(--neon-dim);color:#000;border:none;padding:6px 14px;border-radius:4px;
+  font-family:var(--font-mono);font-size:11px;cursor:pointer;font-weight:bold}
+.rules-toolbar button:hover{background:var(--neon)}
+.rules-toolbar .sec-btn{background:var(--bg-card);color:var(--text);border:1px solid var(--border)}
+.rules-list{flex:1;overflow-y:auto}
+.rule-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:5px;margin-bottom:4px;font-size:12px}
+.rule-row.disabled{opacity:.5}
+.rule-name{font-family:var(--font-mono);color:var(--text-bright);font-size:12px}
+.rule-action{font-size:9px;padding:1px 5px;border-radius:3px}
+.rule-action.block{background:#ff004022;color:var(--critical)}
+.rule-action.alert{background:#ffcc0022;color:var(--medium)}
+.toggle-sw{width:34px;height:18px;background:var(--border);border-radius:9px;position:relative;cursor:pointer;transition:var(--transition)}
+.toggle-sw.on{background:var(--neon-dim)}
+.toggle-sw::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text);transition:var(--transition)}
+.toggle-sw.on::after{left:18px;background:#000}
+.rule-meta{font-size:10px;color:var(--text-dim);margin-top:2px}
+.add-rule-form{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:4px}
+.add-rule-form textarea{width:100%;background:var(--bg-deep);border:1px solid var(--border);color:var(--text);
+  padding:8px;border-radius:4px;font-family:var(--font-mono);font-size:12px;resize:vertical;min-height:50px}
+.add-rule-form textarea:focus{outline:none;border-color:var(--neon-dim)}
+
+/* Query page */
+.query-page{display:flex;flex-direction:column;gap:10px;height:100%}
+.query-input-row{display:flex;gap:8px}
+.query-input-row input{flex:1;background:var(--bg-card);border:1px solid var(--border);color:var(--text);
+  padding:8px 14px;border-radius:4px;font-family:var(--font-mono);font-size:13px}
+.query-input-row input:focus{outline:none;border-color:var(--neon-dim);box-shadow:var(--neon-glow)}
+.query-input-row button{background:var(--neon-dim);color:#000;border:none;padding:8px 20px;border-radius:4px;
+  font-family:var(--font-mono);font-size:12px;cursor:pointer;font-weight:bold}
+.query-input-row button:hover{background:var(--neon)}
+.query-results{flex:1;overflow-y:auto}
+.scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+.scenario-card{background:var(--bg-card);border:1px solid var(--border);border-radius:5px;padding:10px;
+  cursor:pointer;transition:var(--transition)}
+.scenario-card:hover{border-color:var(--neon-dim);box-shadow:var(--neon-glow)}
+.scenario-card .t{font-family:var(--font-mono);font-size:12px;color:var(--neon)}
+.scenario-card .d{font-size:10px;color:var(--text-dim);margin-top:3px}
+.query-history{max-height:200px;overflow-y:auto;margin-top:4px}
+.query-history-item{padding:6px 10px;font-size:11px;border-bottom:1px solid var(--border);cursor:pointer;transition:var(--transition)}
+.query-history-item:hover{background:rgba(0,255,65,0.05)}
+.query-history-item .q{color:var(--text-bright)}.query-history-item .r{color:var(--text-dim);font-size:10px}
+.confirm-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center}
+.confirm-box{background:var(--bg-panel);border:2px solid var(--medium);border-radius:8px;padding:20px;max-width:500px;width:90%}
+.confirm-box .title{font-family:var(--font-mono);color:var(--medium);font-size:14px;margin-bottom:8px}
+.confirm-box .msg{font-size:13px;margin-bottom:16px;line-height:1.5}
+.confirm-box .btns{display:flex;gap:10px;justify-content:flex-end}
+.confirm-box .btns button{padding:8px 20px;border-radius:4px;font-family:var(--font-mono);font-size:12px;cursor:pointer;border:none}
+.confirm-box .btns .ok{background:var(--medium);color:#000;font-weight:bold}
+.confirm-box .btns .cancel{background:var(--bg-card);color:var(--text);border:1px solid var(--border)}
+
+@media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;display:flex;border-right:none;border-bottom:1px solid var(--border);padding:0}.nav-item{flex:1;border-left:none;border-bottom:3px solid transparent;justify-content:center;padding:8px}.nav-item.active{border-left:none;border-bottom-color:var(--neon)}}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <div class="logo">S.E.C. v3 <span>// Risk Monitor</span></div>
+  </div>
+  <div class="mode-group" id="modeGroup">
+    <button class="mode-btn active" data-mode="observe" onclick="setMode('observe')">🔍 OBSERVE</button>
+    <button class="mode-btn" data-mode="auto" onclick="setMode('auto')">🛡️ AUTO</button>
+  </div>
+  <div class="status"><div class="status-dot"></div><span id="mcpStatus">ONLINE</span></div>
+</header>
+
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="nav-item active" data-page="overview" onclick="switchPage('overview')">
+      <span class="icon">📊</span> 总览
+    </div>
+    <div class="nav-item" data-page="rules" onclick="switchPage('rules')">
+      <span class="icon">📋</span> 规则
+    </div>
+    <div class="nav-item" data-page="query" onclick="switchPage('query')">
+      <span class="icon">🔍</span> 查询
+    </div>
+    <div class="nav-item" data-page="disposition" onclick="switchPage('disposition')">
+      <span class="icon">📜</span> 处置记录
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <div class="stats-bar" id="statsBar">
+      <div class="st"><div class="st-l">Mode</div><div class="st-v g" id="sMode">--</div></div>
+      <div class="st"><div class="st-l">Alerts</div><div class="st-v g" id="sAlerts">--</div></div>
+      <div class="st"><div class="st-l">Blocked</div><div class="st-v c" id="sBlocked">--</div></div>
+      <div class="st"><div class="st-l">Pending</div><div class="st-v y" id="sPending">--</div></div>
+      <div class="st"><div class="st-l">Rules</div><div class="st-v g" id="sRules">--</div></div>
+      <div class="st"><div class="st-l">Events</div><div class="st-v b" id="sEvents">--</div></div>
+    </div>
+
+    <!-- ═══ Page: Overview ═══ -->
+    <div class="page active" id="page-overview">
+      <div class="overview-main">
+        <div class="alert-panel" id="alertPanel">
+          <div class="section-title">📋 安全告警 <span id="alertCount" style="font-size:10px;color:var(--text-dim)"></span></div>
+          <div id="alertList"><div class="empty-hint">LOADING...</div></div>
+        </div>
+        <div class="detail-panel" id="detailPanel">
+          <div id="detailContent"><div class="empty-hint">◈ 点击左侧告警查看详情 ◈</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Page: Rules ═══ -->
+    <div class="page" id="page-rules">
+      <div class="rules-page">
+        <div class="section-title">📋 规则管理 <span style="font-size:10px;color:var(--text-dim)">(Rule Engine MCP)</span></div>
+        <div class="rules-toolbar">
+          <input id="ruleSearchInput" placeholder="搜索规则: 关于共谋的规则..." onkeydown="if(event.key==='Enter')searchRules()">
+          <button onclick="searchRules()">🔍 搜索</button>
+          <button class="sec-btn" onclick="loadAllRules()">显示全部</button>
+        </div>
+        <div class="add-rule-form">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:11px;color:var(--neon)">🆕 通过NL添加/修改规则</span>
+          </div>
+          <textarea id="nlRuleInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addNLRule()}">添加规则：检测敏感文件访问，模式包含 /etc/shadow/.env/config，动作 block</textarea>
+          <div style="margin-top:6px;display:flex;gap:8px">
+            <button onclick="addNLRule()">执行</button>
+            <span id="nlRuleResult" style="font-size:11px;color:var(--neon);display:flex;align-items:center"></span>
+          </div>
+        </div>
+        <div class="rules-list" id="rulesList"><div class="empty-hint">LOADING...</div></div>
+      </div>
+    </div>
+
+    <!-- ═══ Page: Query ═══ -->
+    <div class="page" id="page-query">
+      <div class="query-page">
+        <div class="section-title">🔍 语义查询与命令</div>
+        <div class="query-input-row">
+          <input id="nlQueryInput" placeholder="输入自然语言命令: 阻断 IP 192.168.1.100 / 查看过去1小时注入攻击 / 添加规则..." onkeydown="if(event.key==='Enter')submitNLQuery()">
+          <button onclick="submitNLQuery()">执行</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">
+          <span style="font-size:10px;color:var(--text-dim);display:flex;align-items:center">演示场景:</span>
+          <span id="demoScenarios"></span>
+        </div>
+        <div class="query-results" id="queryResults">
+          <div class="empty-hint">◈ 输入指令后结果将在此显示 ◈</div>
+        </div>
+        <div id="queryHistory" class="query-history" style="display:none">
+          <div class="section-title" style="font-size:10px">📜 历史</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Page: Disposition ═══ -->
+    <div class="page" id="page-disposition">
+      <div class="section-title">📜 处置记录 <span id="dispCount" style="font-size:10px;color:var(--text-dim)"></span></div>
+      <div style="margin-bottom:8px;font-size:11px;color:var(--text-dim)">
+        记录每次告警的处置动作、操作人、下发命令及结果。
+      </div>
+      <div id="dispList"><div class="empty-hint">LOADING...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm overlay -->
+<div id="confirmOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
+  <div class="confirm-box">
+    <div class="title">⚠️ 确认操作 (OBSERVE模式)</div>
+    <div class="msg" id="confirmMsg">确认执行此操作?</div>
+    <div class="btns">
+      <button class="cancel" onclick="hideConfirm()">取消</button>
+      <button class="ok" id="confirmOkBtn" onclick="executeConfirmedAction()">确认执行</button>
+    </div>
+  </div>
+</div>
+
+<script>
+mermaid.initialize({startOnLoad:true,theme:'dark',
+  themeVariables:{primaryColor:'#0a2a0a',primaryTextColor:'#c0c8d0',primaryBorderColor:'#00ff41',
+    lineColor:'#1a3a2a',secondaryColor:'#0d1117',tertiaryColor:'#0a1a2a'},
+  flowchart:{useMaxWidth:true,htmlLabels:true},securityLevel:'loose'});
+
+let alerts=[],activeId=null,currentMode='observe',_mermaidId=0;
+let queryHistory=[],pendingAction=null,_highlightDispId=null;
+
+// ── Page switching ─────────────────────────────────────
+function switchPage(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  document.querySelector('[data-page="'+name+'"]').classList.add('active');
+  if(name==='rules')loadAllRules();
+  if(name==='query')loadDemoScenarios();
+  if(name==='disposition')loadDispositions();
+}
+
+// ── Stats ──────────────────────────────────────────────
+async function loadStats(){
+  try{
+    const s=await(await fetch('/api/stats')).json();
+    document.getElementById('sMode').textContent=s.mode||'--';
+    document.getElementById('sAlerts').textContent=s.total_alerts||0;
+    document.getElementById('sBlocked').textContent=s.blocked||0;
+    document.getElementById('sPending').textContent=s.pending_block||0;
+    document.getElementById('sRules').textContent=(s.rules_active||0)+'/'+(s.rules_total||0);
+    document.getElementById('sEvents').textContent=s.total_events||0;
+  }catch(e){}
+}
+async function loadMode(){
+  try{
+    const m=await(await fetch('/api/mode')).json();
+    currentMode=m.mode||'observe';
+    document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===currentMode));
+  }catch(e){}
+}
+
+// ═══════════════════════════════════════════════════════
+// Page: OVERVIEW
+// ═══════════════════════════════════════════════════════
+async function loadOverview(){
+  try{
+    const r=await(await fetch('/api/alerts')).json();
+    alerts=r||[];
+    renderAlerts();
+    document.getElementById('alertCount').textContent='('+alerts.length+'条)';
+  }catch(e){}
+}
+function renderAlerts(){
+  const c=document.getElementById('alertList');
+  if(!alerts.length){c.innerHTML='<div class="empty-hint">暂无告警</div>';return}
+  c.innerHTML=alerts.map(a=>`
+    <div class="alert-card ${a.risk_level||'low'} ${a.alert_id===activeId?'active':''}"
+         onclick="selectAlert('${a.alert_id}')">
+      <div class="alert-top">
+        <span class="sev-badge ${a.risk_level}">${(a.risk_level||'low').toUpperCase()}</span>
+        <span class="alert-title">${esc(a.triggered_rule||'unknown')}</span>
+        <span style="font-size:9px;color:var(--text-dim)">${Math.round((a.confidence||0)*100)}%</span>
+      </div>
+      <div class="alert-meta">
+        <span>🖥 ${esc(a.gateway_id||'?')}</span>
+        <span>📌 ${esc(a.event_type||'?')}</span>
+        <span>🕐 ${(a.timestamp||'').substring(11,19)}</span>
+        <span>${a.risk_level==='high'?'🔴':a.risk_level==='medium'?'🟡':'🟢'} ${esc(a.risk_level||'')}</span>
+      </div>
+      <div class="rule-tags">${(a.rule_matches||[]).map(m=>`
+        <span class="rule-tag ${m.action==='block'?'block':''}">${esc(m.rule_name)}</span>
+      `).join('')}</div>
+      ${a.pending_block?`<button class="block-btn" onclick="event.stopPropagation();confirmBlock('${a.alert_id}')">🛑 确认阻断</button>`:''}
+      ${a.blocked?`<span style="font-size:9px;color:var(--critical)">■ BLOCKED</span> ${a.disposition_id?`<span class="rule-tag" style="cursor:pointer;background:#0a1a0a;color:var(--neon);border-color:var(--neon-dim)" onclick="event.stopPropagation();viewDisposition('${a.disposition_id}')">📜 查看处置</span>`:''}`:''}
+    </div>`).join('');
+}
+async function selectAlert(id){
+  activeId=id;renderAlerts();
+  const dc=document.getElementById('detailContent');
+  dc.innerHTML='<div class="empty-hint">LOADING...</div>';
+  try{
+    const [alertR,reportR]=await Promise.all([
+      fetch('/api/alerts/'+id).then(r=>r.json()),
+      fetch('/api/report/'+id).then(r=>r.json())]);
+    let html='<div class="section-title">📋 事件摘要</div>';
+    html+=`<div class="info-grid">
+      <div class="info-card"><div class="info-label">Event ID</div><div class="info-value">${esc(reportR.event_id||alertR.event_id||'?')}</div></div>
+      <div class="info-card"><div class="info-label">Gateway</div><div class="info-value">${esc(alertR.gateway_id||'?')}</div></div>
+      <div class="info-card"><div class="info-label">Type</div><div class="info-value">${esc(alertR.event_type||'?')}</div></div>
+      <div class="info-card"><div class="info-label">Risk</div><div class="info-value" style="color:${alertR.risk_color||'var(--text)'}">${esc(alertR.risk_level||'?')}</div></div>
+    </div>`;
+    if(reportR.storyline){
+      html+=`<div class="section-title" style="margin-top:8px">📖 叙事</div>`;
+      html+=`<div class="query-result">${esc(reportR.storyline).replace(/\n/g,'<br>')}</div>`;
+    }
+    if(reportR.mermaid){
+      html+=`<div class="section-title" style="margin-top:8px">🌳 决策树</div>`;
+      html+=`<div class="tree-box"><div class="mermaid" id="mermaidBox"></div></div>`;
+    }
+    if(reportR.recommendations?.length){
+      html+=`<div class="section-title" style="margin-top:8px">💡 建议</div>`;
+      reportR.recommendations.forEach((r,i)=>html+=`<div style="font-size:11px;padding:3px 0">${i+1}. ${esc(r)}</div>`);
+    }
+    dc.innerHTML=html;
+    if(reportR.mermaid){
+      _mermaidId++;
+      try{
+        const{svg}=await mermaid.render('msvg-'+_mermaidId,reportR.mermaid);
+        const mb=document.getElementById('mermaidBox');
+        if(mb)mb.innerHTML=svg;
+      }catch(e){console.error('Mermaid:',e)}
+    }
+  }catch(e){dc.innerHTML='<div class="empty-hint">Error loading detail</div>'}
+}
+async function confirmBlock(aid){
+  const r=await(await fetch('/api/block/'+aid,{method:'POST'})).json();
+  if(r.success){
+    loadOverview();
+    // Jump to disposition page and highlight the new record
+    if(r.disposition_id){
+      _highlightDispId = r.disposition_id;
+      switchPage('disposition');
+    }
+  }else alert('阻断失败: '+(r.error||''));
+}
+
+// ═══════════════════════════════════════════════════════
+// Page: RULES
+// ═══════════════════════════════════════════════════════
+async function loadAllRules(){await loadRules();}
+async function loadRules(query){
+  let rules;
+  if(query){
+    const r=await(await fetch('/api/rules/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})})).json();
+    rules=r.rules||[];
+  }else{
+    rules=await(await fetch('/api/rules')).json();
+  }
+  const c=document.getElementById('rulesList');
+  if(!rules||!rules.length){c.innerHTML='<div class="empty-hint">暂无规则</div>';return}
+  c.innerHTML=rules.map(r=>`
+    <div class="rule-row${r.enabled?'':' disabled'}">
+      <div style="flex:1">
+        <div class="rule-name">${esc(r.rule_id||'?')} ${esc(r.name||'')}</div>
+        <div class="rule-meta">${esc(r.description||'')}</div>
+        <div style="font-size:9px;color:var(--text-dim);margin-top:2px">
+          模式: ${(r.patterns||[]).join(', ')}
+          ${r._score?' <span style="color:var(--neon)">相关性:'+r._score+'</span>':''}
+          ${r._match_reasons?' <span style="color:var(--blue)">['+r._match_reasons.join(',')+']</span>':''}
+        </div>
+      </div>
+      <span class="rule-action ${r.action||''}">${(r.action||'?').toUpperCase()}</span>
+      <div class="toggle-sw${r.enabled?' on':''}" onclick="toggleRule('${esc(r.rule_id)}',${r.enabled?'false':'true'})"></div>
+    </div>`).join('');
+}
+async function toggleRule(rid,enabled){
+  await fetch('/api/rules/'+rid+'/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  const q=document.getElementById('ruleSearchInput').value.trim();
+  setTimeout(()=>loadRules(q),300);
+}
+async function searchRules(){const q=document.getElementById('ruleSearchInput').value.trim();await loadRules(q);}
+async function addNLRule(){
+  const text=document.getElementById('nlRuleInput').value.trim();
+  if(!text)return;
+  const r=document.getElementById('nlRuleResult');
+  r.textContent='执行中...';
+  try{
+    const res=await(await fetch('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:text})})).json();
+    if(res.feedback_nl){r.textContent=res.feedback_nl;r.style.color='var(--neon)'}
+    else{r.textContent=res.error||'完成';r.style.color='var(--medium)'}
+    loadAllRules();
+  }catch(e){r.textContent='错误: '+e.message;r.style.color='var(--critical)'}
+}
+
+// ═══════════════════════════════════════════════════════
+// Page: QUERY
+// ═══════════════════════════════════════════════════════
+async function loadDemoScenarios(){
+  try{
+    const d=await(await fetch('/api/query/demo-scenarios')).json();
+    const c=document.getElementById('demoScenarios');
+    c.innerHTML=(d||[]).slice(0,6).map(s=>
+      `<span class="rule-tag" style="cursor:pointer;font-size:10px" onclick="runDemo('${esc(s.query)}')">${esc(s.title)}</span>`
+    ).join('');
+  }catch(e){}
+}
+function runDemo(q){document.getElementById('nlQueryInput').value=q;submitNLQuery();}
+async function submitNLQuery(){
+  const q=document.getElementById('nlQueryInput').value.trim();
+  if(!q)return;
+  const dc=document.getElementById('queryResults');
+  dc.innerHTML='<div class="empty-hint">处理中...</div>';
+  try{
+    const res=await(await fetch('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})})).json();
+
+    // Check if confirmation needed (OBSERVE mode action)
+    if(res.requires_confirmation && res.action_parsed){
+      pendingAction=res.action_parsed;
+      document.getElementById('confirmMsg').textContent=res.feedback_nl||'确认执行此操作?';
+      document.getElementById('confirmOverlay').style.display='flex';
+      dc.innerHTML='<div class="empty-hint">⏳ 等待确认...</div>';
+      return;
+    }
+
+    let html='';
+
+    // NL rule config result
+    if(res.intent==='rule_config'){
+      html=`<div class="section-title" style="font-size:12px">🆕 规则配置结果</div>`;
+      html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
+    }
+    // Mode switch
+    else if(res.intent==='mode_switch'){
+      html=`<div class="section-title" style="font-size:12px">🔄 模式切换</div>`;
+      html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
+      loadMode();
+    }
+    // Action result
+    else if(res.intent==='action'){
+      html=`<div class="section-title" style="font-size:12px">⚡ 命令执行</div>`;
+      html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
+    }
+    // Rules search
+    else if(res.intent==='rules_search'){
+      html=`<div class="section-title" style="font-size:12px">📋 规则搜索结果 (${res.total||0})</div>`;
+      if(res.summary)html+=`<div style="font-size:11px;color:var(--neon);margin-bottom:6px">${esc(res.summary)}</div>`;
+      (res.rules||[]).forEach(r=>{
+        html+=`<div class="info-card" style="font-size:11px">
+          <b>${esc(r.rule_id)} ${esc(r.name)}</b> <span class="rule-action ${r.action||''}">${(r.action||'?').toUpperCase()}</span>
+          <div style="color:var(--text-dim);font-size:10px">${esc(r.description||'')}</div>
+          <div style="font-size:9px;color:var(--blue)">模式: ${(r.patterns||[]).join(', ')} | 相关性: ${r._score||'N/A'}</div>
+        </div>`;
+      });
+    }
+    // Demo result
+    else if(res.intent==='demo_result'){
+      html=`<div class="section-title" style="font-size:12px">🎮 演示场景</div>`;
+      html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
+    }
+    // Query result
+    else if(res.intent==='query'||res.spl){
+      html=`<div class="section-title" style="font-size:12px">🔍 查询结果</div>`;
+      if(res.summary)html+=`<div style="font-size:11px;color:var(--neon);margin-bottom:6px">${esc(res.summary)}</div>`;
+      if(res.spl)html+=`<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">SPL: ${esc(res.spl)} (${res.method})</div>`;
+      if((res.events||[]).length){
+        res.events.forEach(e=>html+=`<div class="info-card" style="font-size:11px">
+          ${esc(e.event_id)} [${esc(e.event_type)}] ${esc(e.triggered_rule)} — ${Math.round((e.confidence||0)*100)}%</div>`);
+      }else{
+        html+=`<div class="query-result" style="color:var(--text-dim)">无匹配事件</div>`;
+      }
+    }
+    // Fallback
+    else{
+      html=`<div class="section-title" style="font-size:12px">📋 结果</div>`;
+      html+=`<div class="query-result">${esc(JSON.stringify(res,null,2))}</div>`;
+    }
+    dc.innerHTML=html;
+
+    // Save history
+    queryHistory.unshift({query:q,intent:res.intent,summary:res.summary||res.feedback_nl||res.error||'ok'});
+    renderQueryHistory();
+    loadStats();
+    loadOverview();
+  }catch(e){dc.innerHTML='<div class="query-result error">错误: '+esc(e.message)+'</div>'}
+}
+function renderQueryHistory(){
+  const c=document.getElementById('queryHistory');
+  if(!queryHistory.length){c.style.display='none';return}
+  c.style.display='block';
+  let html='<div class="section-title" style="font-size:10px">📜 历史</div>';
+  queryHistory.slice(0,15).forEach((h,i)=>html+=`<div class="query-history-item" onclick="document.getElementById('nlQueryInput').value='${esc(h.query)}';submitNLQuery()">
+    <div class="q">${esc(h.query)}</div><div class="r">${esc(h.summary||'')}</div></div>`);
+  c.innerHTML=html;
+}
+function hideConfirm(){pendingAction=null;document.getElementById('confirmOverlay').style.display='none'}
+async function executeConfirmedAction(){
+  if(!pendingAction){hideConfirm();return}
+  try{
+    const res=await(await fetch('/api/action/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:pendingAction})})).json();
+    const dc=document.getElementById('queryResults');
+    dc.innerHTML=`<div class="section-title" style="font-size:12px">⚡ 命令执行结果</div>
+      <div class="query-result">${esc(res.feedback_nl||JSON.stringify(res))}</div>`;
+    queryHistory.unshift({query:'[确认执行] '+pendingAction.target||'action',intent:'action_confirmed',summary:res.feedback_nl||'ok'});
+    renderQueryHistory();
+    loadStats();loadOverview();
+  }catch(e){}
+  hideConfirm();
+}
+
+function viewDisposition(disposition_id){
+  _highlightDispId = disposition_id;
+  switchPage('disposition');
+}
+
+// ═══════════════════════════════════════════════════════
+// Page: DISPOSITION
+// ═══════════════════════════════════════════════════════
+async function loadDispositions(){
+  const c=document.getElementById('dispList');
+  c.innerHTML='<div class="empty-hint">LOADING...</div>';
+  try{
+    const disps=await(await fetch('/api/dispositions')).json();
+    document.getElementById('dispCount').textContent='('+(disps.length||0)+'条)';
+    if(!disps||!disps.length){c.innerHTML='<div class="empty-hint">暂无处置记录</div>';return}
+    c.innerHTML=disps.map(d=>`
+      <div class="info-card disp-item ${d.disposition_id===_highlightDispId?'highlight':''}" id="disp-${d.disposition_id}" style="margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--neon)">${esc(d.disposition_id)}</span>
+          <span style="font-size:10px;color:var(--text-dim)">${esc((d.created_at||'').substring(0,19))}</span>
+        </div>
+        <div class="info-grid" style="grid-template-columns:1fr 1fr 1fr">
+          <div><div class="info-label">操作人</div><div class="info-value" style="font-size:11px;color:${d.operator==='auto'?'var(--blue)':'var(--medium)'}">${d.operator==='auto'?'🤖 auto':'👤 '+esc(d.operator)}</div></div>
+          <div><div class="info-label">动作</div><div class="info-value" style="font-size:11px;color:${d.action==='block'?'var(--critical)':'var(--text)'}">${esc(d.action)}</div></div>
+          <div><div class="info-label">结果</div><div class="info-value" style="font-size:11px;color:${d.result==='success'?'var(--neon)':d.result==='failed'?'var(--critical)':'var(--medium)'}">${esc(d.result)}</div></div>
+        </div>
+        <div style="margin-top:4px;padding:6px;background:var(--bg-deep);border-radius:4px;font-size:10px;font-family:var(--font-mono);color:var(--text-dim);word-break:break-all">
+          ${esc(d.command)}
+        </div>
+        <div style="margin-top:4px;font-size:10px;color:var(--text-dim)">
+          ${esc(d.detail)} ${d.triggered_rule?' | 规则: '+esc(d.triggered_rule):''} ${d.risk_level?' | 风险: '+esc(d.risk_level):''}
+          ${d.acknowledged_at?' | 确认时间: '+esc(d.acknowledged_at.substring(0,19)):''}
+        </div>
+      </div>`).join('');
+    // Scroll to highlighted disposition
+    if(_highlightDispId){
+      setTimeout(()=>{
+        const el=document.getElementById('disp-'+_highlightDispId);
+        if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+        _highlightDispId=null;
+      },200);
+    }
+  }catch(e){c.innerHTML='<div class="empty-hint">Error: '+esc(e.message)+'</div>'}
+}
+
+// ── Mode ──────────────────────────────────────────────
+async function setMode(mode){
+  await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+  currentMode=mode;
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===currentMode));
+}
+
+// ── Utils ─────────────────────────────────────────────
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+
+// ── Auto-refresh ──────────────────────────────────────
+async function refresh(){
+  await Promise.all([loadStats(),loadMode(),loadOverview()]);
+  setTimeout(refresh,10000);
+}
+refresh();
+</script>
+</body>
+</html>

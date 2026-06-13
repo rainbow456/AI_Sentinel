@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S.E.C. — Security Event Command</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CYBERPUNK SECURITY COMMAND CENTER — DARK THEME + NEON GREEN
+   ============================================================ */
+
+:root {
+  --bg-deep: #060608;
+  --bg-panel: #0d1117;
+  --bg-card: #111922;
+  --border: #1a3a2a;
+  --border-active: #00ff4133;
+  --neon: #00ff41;
+  --neon-dim: #00cc33;
+  --neon-glow: 0 0 12px #00ff4144;
+  --text: #c0c8d0;
+  --text-dim: #5a6470;
+  --text-bright: #e8f0e8;
+  --critical: #ff0040;
+  --critical-glow: 0 0 16px #ff004066;
+  --high: #ff5500;
+  --high-glow: 0 0 12px #ff550044;
+  --medium: #ffcc00;
+  --low: #00ff41;
+  --font-mono: 'Share Tech Mono', 'Courier New', monospace;
+  --font-ui: 'Segoe UI', system-ui, sans-serif;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scan-line overlay */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 65, 0.015) 2px,
+    rgba(0, 255, 65, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+
+.header {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--neon);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--neon);
+  box-shadow: var(--neon-glow);
+  animation: logoPulse 3s ease-in-out infinite;
+}
+
+@keyframes logoPulse {
+  0%, 100% { box-shadow: 0 0 8px #00ff4144; }
+  50% { box-shadow: 0 0 20px #00ff4188; }
+}
+
+.header-title {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: var(--neon);
+  letter-spacing: 2px;
+}
+
+.header-title span { color: var(--text-dim); }
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--neon);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--neon);
+  box-shadow: 0 0 8px var(--neon);
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--neon); }
+  50% { opacity: 0.4; box-shadow: 0 0 2px var(--neon); }
+}
+
+/* ── Stats Bar ───────────────────────────────────────────── */
+
+.stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 20px;
+  min-width: 110px;
+  flex: 1;
+  max-width: 180px;
+  transition: var(--transition);
+}
+
+.stat-card:hover {
+  border-color: var(--border-active);
+  box-shadow: var(--neon-glow);
+}
+
+.stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.stat-value.critical { color: var(--critical); text-shadow: 0 0 12px var(--critical); }
+.stat-value.high { color: var(--high); text-shadow: 0 0 8px var(--high); }
+.stat-value.medium { color: var(--medium); }
+.stat-value.low { color: var(--low); }
+
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--neon);
+  padding: 8px 16px;
+  border: 1px solid var(--neon);
+  border-radius: 4px;
+  animation: liveGlow 2s ease-in-out infinite;
+  margin-left: auto;
+}
+
+@keyframes liveGlow {
+  0%, 100% { box-shadow: 0 0 4px #00ff4144; }
+  50% { box-shadow: 0 0 14px #00ff4188; }
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon);
+  animation: statusPulse 1s ease-in-out infinite;
+}
+
+/* ── Main Content ────────────────────────────────────────── */
+
+.main-content {
+  display: flex;
+  height: calc(100vh - 170px);
+}
+
+/* ── Alert List ──────────────────────────────────────────── */
+
+.alert-list-panel {
+  width: 100%;
+  max-width: 100%;
+  overflow-y: auto;
+  padding: 12px;
+  transition: width var(--transition);
+}
+
+.alert-list-panel.has-detail {
+  width: 380px;
+  min-width: 380px;
+  border-right: 1px solid var(--border);
+}
+
+/* Custom scrollbar */
+.alert-list-panel::-webkit-scrollbar { width: 6px; }
+.alert-list-panel::-webkit-scrollbar-track { background: var(--bg-deep); }
+.alert-list-panel::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.alert-list-panel::-webkit-scrollbar-thumb:hover { background: var(--neon-dim); }
+
+.alert-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+  animation: slideIn 0.4s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.alert-item:hover {
+  border-color: var(--border-active);
+  box-shadow: var(--neon-glow);
+}
+
+.alert-item.active {
+  border-color: var(--neon-dim);
+  box-shadow: var(--neon-glow);
+}
+
+.alert-item.critical-alert { border-left: 3px solid var(--critical); }
+.alert-item.high-alert { border-left: 3px solid var(--high); }
+.alert-item.medium-alert { border-left: 3px solid var(--medium); }
+.alert-item.low-alert { border-left: 3px solid var(--low); }
+
+.alert-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+/* Pulsing red dot for critical */
+.severity-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.severity-dot.critical {
+  background: var(--critical);
+  box-shadow: 0 0 8px var(--critical);
+  animation: criticalPulse 0.8s ease-in-out infinite;
+}
+
+@keyframes criticalPulse {
+  0%, 100% { box-shadow: 0 0 6px var(--critical); }
+  50% { box-shadow: 0 0 20px var(--critical), 0 0 40px var(--critical); }
+}
+
+.severity-dot.high { background: var(--high); box-shadow: 0 0 6px var(--high); }
+.severity-dot.medium { background: var(--medium); }
+.severity-dot.low { background: var(--low); }
+
+.alert-info { flex: 1; min-width: 0; }
+
+.alert-header-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.severity-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.severity-badge.critical { background: #ff004022; color: var(--critical); border: 1px solid #ff004044; }
+.severity-badge.high { background: #ff550022; color: var(--high); border: 1px solid #ff550044; }
+.severity-badge.medium { background: #ffcc0022; color: var(--medium); border: 1px solid #ffcc0044; }
+.severity-badge.low { background: #00ff4122; color: var(--low); border: 1px solid #00ff4144; }
+
+.attack-type-label {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.alert-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.alert-meta span { font-family: var(--font-mono); }
+
+.alert-chevron {
+  font-size: 18px;
+  color: var(--text-dim);
+  transition: transform var(--transition);
+}
+
+.alert-item.active .alert-chevron {
+  color: var(--neon);
+  transform: rotate(180deg);
+}
+
+/* ── Detail Panel ────────────────────────────────────────── */
+
+.detail-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: none;
+  gap: 16px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.detail-panel.visible {
+  display: flex;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.detail-panel::-webkit-scrollbar { width: 6px; }
+.detail-panel::-webkit-scrollbar-track { background: var(--bg-deep); }
+.detail-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.report-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.report-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  animation: cardIn 0.4s ease-out;
+}
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.report-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-card-header .icon {
+  font-size: 18px;
+}
+
+.report-card-header .title {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--neon);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* Technical report styles */
+.log-block {
+  background: #0a0f0a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--low);
+  line-height: 1.7;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.timeline-entry {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #1a2a1a;
+  font-size: 13px;
+}
+
+.timeline-time {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 65px;
+}
+
+.timeline-sev {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.timeline-sev.critical { background: #ff004022; color: var(--critical); }
+.timeline-sev.high { background: #ff550022; color: var(--high); }
+.timeline-sev.medium { background: #ffcc0022; color: var(--medium); }
+.timeline-sev.low { background: #00ff4122; color: var(--low); }
+
+.timeline-desc {
+  color: var(--text);
+  flex: 1;
+}
+
+.correlation-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.corr-item {
+  background: #0a0f0a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.corr-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.corr-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--neon);
+}
+
+.coordinated-badge {
+  display: inline-block;
+  background: #ff004022;
+  color: var(--critical);
+  border: 1px solid #ff004044;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  animation: criticalPulse 2s ease-in-out infinite;
+}
+
+/* Executive summary styles */
+.risk-banner {
+  padding: 14px 18px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 16px;
+  text-align: center;
+  letter-spacing: 2px;
+}
+
+.summary-text {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  margin-bottom: 16px;
+  padding: 14px;
+  background: #0a0f0a;
+  border-radius: 8px;
+  border-left: 3px solid var(--neon);
+}
+
+.action-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #0a0f0a;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  transition: var(--transition);
+}
+
+.action-item:hover {
+  border-color: var(--neon-dim);
+}
+
+.action-num {
+  font-family: var(--font-mono);
+  color: var(--neon);
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* ── Empty state ─────────────────────────────────────────── */
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+
+.empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state .text { font-family: var(--font-mono); font-size: 14px; }
+
+/* ── Loading spinner ─────────────────────────────────────── */
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--neon);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.loading::before {
+  content: '▮▮▮';
+  animation: loadingDots 1s steps(4, end) infinite;
+}
+
+@keyframes loadingDots {
+  0% { content: '▮▯▯'; }
+  33% { content: '▮▮▯'; }
+  66% { content: '▮▮▮'; }
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .detail-panel.visible { flex-direction: column; }
+  .alert-list-panel.has-detail { width: 100%; min-width: 0; max-height: 300px; }
+  .main-content { flex-direction: column; }
+  .stats-bar { overflow-x: auto; flex-wrap: nowrap; }
+  .stat-card { min-width: 90px; }
+}
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo-icon">◈</div>
+    <div class="header-title">
+      S.E.C. <span>// Security Event Command</span>
+    </div>
+  </div>
+  <div class="status-indicator">
+    <div class="status-dot"></div>
+    SYSTEM ACTIVE
+  </div>
+</header>
+
+<!-- ═══════════════ STATS BAR ═══════════════ -->
+<div class="stats-bar" id="statsBar">
+  <div class="stat-card">
+    <div class="stat-label">Total Alerts</div>
+    <div class="stat-value low" id="statTotal">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Critical</div>
+    <div class="stat-value critical" id="statCritical">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">High</div>
+    <div class="stat-value high" id="statHigh">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Medium</div>
+    <div class="stat-value medium" id="statMedium">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Low</div>
+    <div class="stat-value low" id="statLow">--</div>
+  </div>
+  <div class="live-badge">
+    <div class="live-dot"></div>
+    LIVE
+  </div>
+</div>
+
+<!-- ═══════════════ MAIN CONTENT ═══════════════ -->
+<div class="main-content">
+  <!-- Alert List -->
+  <div class="alert-list-panel" id="alertListPanel">
+    <div class="loading" id="loadingIndicator">LOADING</div>
+    <div id="alertList"></div>
+  </div>
+
+  <!-- Detail Panel -->
+  <div class="detail-panel" id="detailPanel">
+    <!-- Left: Technical Report -->
+    <div class="report-column" id="techColumn">
+      <!-- Populated by JS -->
+    </div>
+    <!-- Right: Executive Summary -->
+    <div class="report-column" id="execColumn">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   SECURITY EVENT COMMAND — CLIENT LOGIC
+   ============================================================ */
+
+const API = '/api/alerts';
+const POLL_INTERVAL = 5000; // 5 seconds
+let alerts = [];
+let activeAlertId = null;
+let knownIds = new Set();
+
+// ── DOM refs ────────────────────────────────────────────────
+const alertList = document.getElementById('alertList');
+const alertListPanel = document.getElementById('alertListPanel');
+const detailPanel = document.getElementById('detailPanel');
+const techColumn = document.getElementById('techColumn');
+const execColumn = document.getElementById('execColumn');
+const loadingIndicator = document.getElementById('loadingIndicator');
+
+// ── Fetch & render ──────────────────────────────────────────
+
+async function fetchAlerts() {
+  try {
+    const resp = await fetch(API);
+    if (!resp.ok) throw new Error('API error');
+    const data = await resp.json();
+    alerts = data;
+    updateStats();
+    renderAlertList();
+    loadingIndicator.style.display = 'none';
+  } catch (err) {
+    console.error('Fetch error:', err);
+    loadingIndicator.textContent = 'CONNECTION LOST — RETRYING';
+  }
+}
+
+function updateStats() {
+  const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+  alerts.forEach(a => { counts[a.severity] = (counts[a.severity] || 0) + 1; });
+  document.getElementById('statTotal').textContent = alerts.length;
+  document.getElementById('statCritical').textContent = counts.critical;
+  document.getElementById('statHigh').textContent = counts.high;
+  document.getElementById('statMedium').textContent = counts.medium;
+  document.getElementById('statLow').textContent = counts.low;
+}
+
+function renderAlertList() {
+  // Check for new alerts (not in knownIds)
+  const newIds = [];
+  alerts.forEach(a => {
+    if (!knownIds.has(a.id)) newIds.push(a.id);
+  });
+
+  // Build HTML
+  alertList.innerHTML = alerts.map((a, idx) => {
+    const isActive = a.id === activeAlertId;
+    const isNew = newIds.includes(a.id);
+    return `
+      <div class="alert-item ${a.severity}-alert ${isActive ? 'active' : ''} ${isNew ? 'new-alert' : ''}"
+           data-alert-id="${a.id}"
+           onclick="toggleAlert('${a.id}')"
+           style="animation-delay: ${idx * 0.03}s">
+        <div class="alert-row">
+          <div class="severity-dot ${a.severity}"></div>
+          <div class="alert-info">
+            <div class="alert-header-line">
+              <span class="severity-badge ${a.severity}">${a.severity_label}</span>
+              <span class="attack-type-label">${escapeHtml(a.attack_type)}</span>
+            </div>
+            <div class="alert-meta">
+              <span>🖥 ${escapeHtml(a.source_ip)}</span>
+              <span>🕐 ${a.timestamp_display}</span>
+              <span>📋 ${a.related_count} logs</span>
+            </div>
+          </div>
+          <div class="alert-chevron">▼</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Track known IDs
+  alerts.forEach(a => knownIds.add(a.id));
+}
+
+// ── Alert click → fetch detail ──────────────────────────────
+
+async function toggleAlert(id) {
+  if (activeAlertId === id) {
+    // Collapse
+    closeDetail();
+    return;
+  }
+
+  activeAlertId = id;
+  renderAlertList();
+  alertListPanel.classList.add('has-detail');
+  detailPanel.classList.add('visible');
+
+  // Show loading
+  techColumn.innerHTML = '<div class="loading">DECRYPTING</div>';
+  execColumn.innerHTML = '<div class="loading">ANALYZING</div>';
+
+  // Fetch full report
+  try {
+    const resp = await fetch(API + '/' + id);
+    if (!resp.ok) throw new Error('Not found');
+    const report = await resp.json();
+    renderDetail(report);
+  } catch (err) {
+    techColumn.innerHTML = '<div class="report-card"><div class="empty-state"><div class="icon">⚠</div><div class="text">REPORT UNAVAILABLE</div></div></div>';
+    execColumn.innerHTML = '';
+  }
+}
+
+function closeDetail() {
+  activeAlertId = null;
+  alertListPanel.classList.remove('has-detail');
+  detailPanel.classList.remove('visible');
+  techColumn.innerHTML = '';
+  execColumn.innerHTML = '';
+  renderAlertList();
+}
+
+// ── Render detail panels ────────────────────────────────────
+
+function renderDetail(report) {
+  const tech = report.technical_report;
+  const exec = report.executive_summary;
+
+  // ── Technical Report ──────────────────────────────────
+  let techHtml = '';
+
+  // Raw log
+  techHtml += `
+    <div class="report-card" style="animation-delay: 0.05s">
+      <div class="report-card-header">
+        <span class="icon">📄</span>
+        <span class="title">Raw Log / 原始日志</span>
+      </div>
+      <div class="log-block">${escapeHtml(tech.raw_log)}</div>
+    </div>`;
+
+  // Correlation
+  const corr = tech.correlation;
+  techHtml += `
+    <div class="report-card" style="animation-delay: 0.1s">
+      <div class="report-card-header">
+        <span class="icon">🔬</span>
+        <span class="title">Correlation / 关联分析</span>
+      </div>
+      <div class="correlation-grid">
+        <div class="corr-item">
+          <div class="corr-label">Attack Types</div>
+          <div class="corr-value">${Object.keys(corr.attack_types).length}</div>
+        </div>
+        <div class="corr-item">
+          <div class="corr-label">Time Span</div>
+          <div class="corr-value">${corr.time_span_seconds}s</div>
+        </div>
+        <div class="corr-item">
+          <div class="corr-label">Total Related</div>
+          <div class="corr-value">${report.related_count}</div>
+        </div>
+        <div class="corr-item">
+          <div class="corr-label">Coordinated</div>
+          <div class="corr-value">${corr.coordinated_attack ? '<span class="coordinated-badge">YES ⚠</span>' : '<span style="color:#00ff41">NO</span>'}</div>
+        </div>
+      </div>
+    </div>`;
+
+  // Attack type breakdown
+  techHtml += `
+    <div class="report-card" style="animation-delay: 0.15s">
+      <div class="report-card-header">
+        <span class="icon">📊</span>
+        <span class="title">Attack Type Breakdown</span>
+      </div>`;
+  for (const [atype, count] of Object.entries(corr.attack_types)) {
+    const pct = Math.round(count / report.related_count * 100);
+    techHtml += `
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span>${escapeHtml(atype)}</span><span style="color:var(--neon);font-family:var(--font-mono)">${count}</span>
+        </div>
+        <div style="background:var(--border);height:4px;border-radius:2px">
+          <div style="background:var(--neon);height:4px;border-radius:2px;width:${pct}%;transition:width 0.6s ease"></div>
+        </div>
+      </div>`;
+  }
+  techHtml += '</div>';
+
+  // Timeline
+  techHtml += `
+    <div class="report-card" style="animation-delay: 0.2s">
+      <div class="report-card-header">
+        <span class="icon">⏱</span>
+        <span class="title">Timeline / 时间线</span>
+      </div>`;
+  tech.timeline.forEach(entry => {
+    techHtml += `
+      <div class="timeline-entry">
+        <span class="timeline-time">${entry.time}</span>
+        <span class="timeline-sev ${entry.severity}">${entry.severity.toUpperCase()}</span>
+        <span class="timeline-desc">${escapeHtml(entry.attack_type)} — ${escapeHtml(entry.description.substring(0, 50))}</span>
+      </div>`;
+  });
+  techHtml += '</div>';
+
+  techColumn.innerHTML = techHtml;
+
+  // ── Executive Summary ─────────────────────────────────
+  let execHtml = '';
+
+  // Risk banner
+  const riskColor = report.risk_color;
+  execHtml += `
+    <div class="report-card" style="animation-delay: 0.05s">
+      <div class="report-card-header">
+        <span class="icon">🎯</span>
+        <span class="title">Risk Assessment / 风险评估</span>
+      </div>
+      <div class="risk-banner" style="background:${riskColor}22;color:${riskColor};border:2px solid ${riskColor}44;text-shadow:0 0 10px ${riskColor}44">
+        ${exec.risk_assessment}
+      </div>`;
+
+  // Alert info grid
+  execHtml += `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div style="background:#0a0f0a;padding:10px;border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Source IP</div>
+          <div style="font-family:var(--font-mono);font-size:16px;color:var(--neon)">${escapeHtml(report.source_ip)}</div>
+        </div>
+        <div style="background:#0a0f0a;padding:10px;border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Attack Type</div>
+          <div style="font-family:var(--font-mono);font-size:14px;color:var(--text-bright)">${escapeHtml(report.attack_type)}</div>
+        </div>
+        <div style="background:#0a0f0a;padding:10px;border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Severity</div>
+          <div style="font-family:var(--font-mono);font-size:16px;color:${report.severity_color}">${report.severity_label}</div>
+        </div>
+        <div style="background:#0a0f0a;padding:10px;border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Related Events</div>
+          <div style="font-family:var(--font-mono);font-size:16px;color:var(--neon)">${report.related_count}</div>
+        </div>
+      </div>
+    </div>`;
+
+  // AI Analysis conclusion
+  execHtml += `
+    <div class="report-card" style="animation-delay: 0.1s">
+      <div class="report-card-header">
+        <span class="icon">🧠</span>
+        <span class="title">AI Analysis / 智能分析</span>
+      </div>
+      <div class="summary-text">${escapeHtml(exec.activity_summary)}</div>
+      <div style="font-size:13px;color:var(--text-dim);line-height:1.7;margin-bottom:12px">${escapeHtml(exec.analysis_conclusion)}</div>
+    </div>`;
+
+  // Recommendations
+  execHtml += `
+    <div class="report-card" style="animation-delay: 0.15s">
+      <div class="report-card-header">
+        <span class="icon">💡</span>
+        <span class="title">Recommended Actions / 建议措施</span>
+      </div>
+      <ul class="action-list">`;
+  exec.recommended_actions.forEach((action, i) => {
+    execHtml += `
+        <li class="action-item">
+          <span class="action-num">${String(i + 1).padStart(2, '0')}</span>
+          <span>${escapeHtml(action)}</span>
+        </li>`;
+  });
+  execHtml += `
+      </ul>
+    </div>`;
+
+  execColumn.innerHTML = execHtml;
+}
+
+// ── Utils ───────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ── Init ────────────────────────────────────────────────────
+
+fetchAlerts();
+setInterval(fetchAlerts, POLL_INTERVAL);
+
+// Keyboard shortcut: Escape to close detail
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && activeAlertId) {
+    closeDetail();
+  }
+});
+</script>
+
+</body>
+</html>
