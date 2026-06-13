@@ -146,15 +146,25 @@ _RULES: List[Dict[str, Any]] = _compile_rules(_RAW_RULES)
 # ---------------------------------------------------------------------------
 # Presidio (generic PII) / Presidio 通用 PII
 # ---------------------------------------------------------------------------
-# EN: Heavy optional dependency. If unavailable, the regex rules above still work.
-# 中文：可选的重型依赖；缺失时上面的正则规则仍可工作。
+# EN: Heavy optional dependency — initialized LAZILY (first detect call), not at
+#     import time, so loading this module never blocks startup with spaCy/Presidio.
+# 中文：重型可选依赖，改为「首次 detect 时」才初始化，import 本模块不再触发 Presidio
+#     加载，避免拖慢/卡死网关启动。
 _analyzer = None
-try:
-    from presidio_analyzer import AnalyzerEngine
+_analyzer_ready = False
 
-    _analyzer = AnalyzerEngine()
-except Exception:  # pragma: no cover - fall back when models/deps are missing
-    _analyzer = None
+
+def _get_analyzer():
+    """懒加载 Presidio；失败则返回 None（正则规则仍可用）。"""
+    global _analyzer, _analyzer_ready
+    if not _analyzer_ready:
+        _analyzer_ready = True
+        try:
+            from presidio_analyzer import AnalyzerEngine
+            _analyzer = AnalyzerEngine()
+        except Exception:  # pragma: no cover
+            _analyzer = None
+    return _analyzer
 
 # EN: Risk score per Presidio entity type (entities not listed use a default).
 # 中文：各 Presidio 实体类型对应的风险分（未列出的使用默认值）。
@@ -202,11 +212,12 @@ def _scan_presidio(text: str) -> List[Dict[str, Any]]:
     EN: Run Presidio (if available) and return candidate hits for generic PII.
     中文：运行 Presidio（若可用），返回通用 PII 的候选命中。
     """
-    if _analyzer is None:
+    analyzer = _get_analyzer()
+    if analyzer is None:
         return []
     hits: List[Dict[str, Any]] = []
     try:
-        results = _analyzer.analyze(text=text, language="en")
+        results = analyzer.analyze(text=text, language="en")
     except Exception:  # pragma: no cover - never let detection crash the request
         return []
     for r in results:
