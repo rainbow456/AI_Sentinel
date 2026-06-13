@@ -64,7 +64,10 @@ class SecurityAgent:
         self._processed_event_ids: set[str] = set()
         self._lock = threading.Lock()
         self._llm_config: dict = {}
-        self._demo_cycle = 0
+        # Polling state (replaces _demo_cycle)
+        self._poll_thread: threading.Thread | None = None
+        self._poll_interval: int = int(os.getenv("POLL_INTERVAL", "10"))
+        self._last_poll_time: datetime = datetime.now() - timedelta(hours=1)
 
         self._init_mcp()
 
@@ -129,40 +132,58 @@ class SecurityAgent:
         except Exception:
             return fallback
 
-    def _load_events_from_csv(self) -> int:
-        """
-        Load events directly from CSV, bypassing MCP entirely.
-        Each event is matched against rules and generates alerts.
-        Returns the number of events loaded.
-        """
-        from analyst.servers.splunk_mcp import _load_csv_events
-        raw_events = _load_csv_events()
-        count = 0
-        for ed in raw_events:
+    def _start_polling(self):
+        """Start background polling thread that fetches events from Splunk."""
+        if self._poll_thread is not None:
+            return
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+        print(f"{_ts()} 🔄 开始轮询 Splunk (间隔={self._poll_interval}s)")
+
+    def _poll_loop(self):
+        """Background loop: poll Splunk for new events every N seconds."""
+        while self._running:
             try:
-                ts = datetime.fromisoformat(ed["timestamp"]) if isinstance(ed["timestamp"], str) else datetime.now()
-                event = GatewayEvent(
-                    event_id=ed.get("event_id", f"CSV-{uuid.uuid4().hex[:8]}"),
-                    timestamp=ts,
-                    module=ed.get("module", "input_guard"),
-                    blocked=bool(ed.get("blocked", False)),
-                    handler=ed.get("handler", "gateway"),
-                    risk_score=int(ed.get("risk_score", 0)),
-                    user_input=ed.get("user_input", ""),
-                    subject_name=ed.get("subject_name", ""),
-                    agent_id=ed.get("agent_id", ""),
-                    findings=ed.get("findings", []),
-                    gateway_id=ed.get("gateway_id", "gateway-01"),
-                    llm_provider=ed.get("llm_provider", "anthropic"),
-                )
-                if event.event_id not in self._processed_event_ids:
-                    self._process_event(event)
-                    self._processed_event_ids.add(event.event_id)
-                    count += 1
+                new_events = self._fetch_events()
+                if new_events:
+                    with self._lock:
+                        fresh = [e for e in new_events
+                                 if e.event_id not in self._processed_event_ids]
+                    for event in fresh:
+                        self._process_event(event)
+                        with self._lock:
+                            self._processed_event_ids.add(event.event_id)
+                    if fresh:
+                        print(f"{_ts()} 📥 轮询获得 {len(fresh)} 个新事件 "
+                              f"(总计 {len(self._processed_event_ids)})")
             except Exception as e:
-                print(f"  [CSV] Error processing event: {e}")
-        print(f"  [CSV] Loaded {count} events from CSV, {len(self.alerts)} alerts generated")
-        return count
+                print(f"{_ts()} {YELLOW}⚠ 轮询错误: {e}{RESET}")
+            for _ in range(self._poll_interval):
+                if not self._running:
+                    break
+                time.sleep(1)
+
+    def _poll_events_now(self) -> list[dict]:
+        """Synchronous one-shot poll: fetch recent events from Splunk MCP.
+        Called by the UI to get events on demand."""
+        events = self._fetch_events()
+        summaries = []
+        for e in events:
+            d = {
+                "event_id": e.event_id,
+                "timestamp": e.timestamp.isoformat() if e.timestamp else "",
+                "module": e.module,
+                "blocked": e.blocked,
+                "handler": e.handler,
+                "risk_score": e.risk_score,
+                "user_input": e.user_input[:80] if e.user_input else "",
+                "subject_name": e.subject_name,
+                "agent_id": e.agent_id,
+                "findings": [f.get("rule_hit", "") for f in (e.findings or [])],
+                "gateway_id": e.gateway_id,
+            }
+            summaries.append(d)
+        return summaries
 
     # ═══════════════════════════════════════════════════════════════════
     # NL Command Processing (dual-intent)
@@ -185,8 +206,6 @@ class SecurityAgent:
         _think(f"处理自然语言指令: 「{query_text}」")
         intent = classify_intent(query_text)
         print(f"  {DIM}意图分类: {intent}{RESET}")
-        if "模拟" in query_text and ("共谋" in query_text or "collusion" in query_text):
-            return self._handle_demo_collusion()
         if intent == INTENT_MODE_SWITCH:
             return self._handle_mode_switch(query_text)
         elif intent == INTENT_ACTION:
@@ -337,51 +356,6 @@ class SecurityAgent:
             "new_mode": new_mode.value,
             "success": True,
             "feedback_nl": f"✅ 已切换模式为「{new_mode.value}」",
-        }
-
-    def _handle_demo_collusion(self) -> dict:
-        """Simulate a collusion attack demo scenario."""
-        # Create a demo action_confirmation event (matching new model)
-        from .models import GatewayEvent, Finding
-        now = datetime.now()
-        demo_event = GatewayEvent(
-            event_id=f"GW-DEMO-{uuid.uuid4().hex[:4]}",
-            timestamp=now,
-            module="disposition",
-            blocked=False,
-            handler="gateway",
-            risk_score=85,
-            user_input="模拟共谋：tech_support 向 refund 私下确认退款操作",
-            subject_name="tech_support",
-            agent_id="refund",
-            findings=[
-                Finding(
-                    rule_hit="abnormal_collaboration",
-                    owasp_ast="LLM07: Agent Collusion",
-                    severity="critical",
-                    matched="tech_support → refund (private message)",
-                    description="Agent间异常协作模式：技术支持私下确认退款操作"
-                )
-            ],
-            gateway_id="gw-demo",
-            llm_provider="anthropic",
-        )
-        # Process: match rules
-        self._process_event(demo_event)
-
-        # In AUTO mode, block is already issued
-        if self.mode == AgentMode.AUTO:
-            return {
-                "intent": "demo_result",
-                "feedback_nl": "✅ 模拟共谋攻击已触发 → 规则R004匹配 → 已自动阻断",
-                "event_id": demo_event.event_id,
-                "auto_blocked": True,
-            }
-        return {
-            "intent": "demo_result",
-            "feedback_nl": "⚠️ 模拟共谋攻击已触发 → 规则R004匹配 → 等待确认阻断（OBSERVE模式）",
-            "event_id": demo_event.event_id,
-            "auto_blocked": False,
         }
 
     # ═══════════════════════════════════════════════════════════════════
@@ -550,6 +524,31 @@ class SecurityAgent:
             self.dispositions.append(d)
         return d
 
+    def _send_disposition_to_splunk(self, d: DispositionRecord):
+        """Write a disposition status event to Splunk HEC."""
+        if not self._mcp_enabled or not self._mcp:
+            return False
+        try:
+            result = self._mcp_call("splunk-query", "splunk_ingest_disposition", {
+                "event_id": d.event_id,
+                "disposition_id": d.disposition_id,
+                "status": d.result,
+                "mode": self.mode.value,
+                "operator": d.operator,
+                "action": d.action,
+                "command": d.command,
+                "detail": d.detail,
+                "triggered_rule": d.triggered_rule,
+                "risk_level": d.risk_level,
+            }, fallback=None)
+            if result and result.get("success"):
+                print(f"{_ts()} 📤 处置已写入 Splunk: {d.disposition_id}")
+                return True
+            return False
+        except Exception as e:
+            print(f"{_ts()} {YELLOW}⚠ Splunk HEC 写入失败: {e}{RESET}")
+            return False
+
     def _process_event(self, event):
         matches = self.rule_engine.match(event)
         if not matches: return
@@ -570,6 +569,8 @@ class SecurityAgent:
                 detail=f"自动阻断: 规则 {event.triggered_rule} 匹配, risk_score={event.risk_score}",
             )
             alert.disposition_id = d.disposition_id
+            # Write back to Splunk HEC
+            self._send_disposition_to_splunk(d)
         with self._lock: self.alerts.append(alert)
 
     def execute_block(self, event):
@@ -597,6 +598,8 @@ class SecurityAgent:
                         acknowledged_at=datetime.now(),
                     )
                     a.disposition_id = d.disposition_id
+                    # Write back to Splunk HEC
+                    self._send_disposition_to_splunk(d)
                     return {"success":True, "result": r, "disposition_id": d.disposition_id}
         return {"success":False,"error":"Not found"}
 
@@ -640,6 +643,31 @@ class SecurityAgent:
                 "total_dispositions":len(self.dispositions),
                 "rules_active":sum(1 for r in self.rule_engine.rules.values() if r.enabled),"rules_total":len(self.rule_engine.rules),
                 "mcp_enabled":self._mcp_enabled}
+
+    def get_recent_events(self, limit: int = 50) -> list[dict]:
+        """Return recent events from Splunk for the dashboard event stream."""
+        events = []
+        result = self._mcp_call("splunk-query", "splunk_search", {
+            "query": "search index=* sourcetype=\"ai_sentinel:gateway\"",
+            "earliest": "-10m", "latest": "now"
+        }, fallback=None)
+        if result and result.get("events"):
+            for ed in result["events"][:limit]:
+                events.append({
+                    "event_id": ed.get("event_id", ""),
+                    "timestamp": ed.get("timestamp", ""),
+                    "module": ed.get("module", ""),
+                    "blocked": bool(ed.get("blocked", False)),
+                    "handler": ed.get("handler", ""),
+                    "risk_score": int(ed.get("risk_score", 0)),
+                    "user_input": (ed.get("user_input", "") or "")[:100],
+                    "subject_name": ed.get("subject_name", ""),
+                    "agent_id": ed.get("agent_id", ""),
+                    "findings": ed.get("findings", []),
+                    "gateway_id": ed.get("gateway_id", ""),
+                    "backend": result.get("backend", "unknown"),
+                })
+        return events
 
     def get_rules(self):
         r=self._mcp_call("rule-engine","get_rules",{"enabled_only":False})
