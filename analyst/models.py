@@ -203,6 +203,7 @@ class GatewayEvent:
     findings: list = field(default_factory=list)  # list of Finding or dict
     gateway_id: str = "gateway-01"
     llm_provider: str = "anthropic"
+    held: bool = False         # Gateway gray-zone hold: not blocked but awaiting analyst + human adjudication; the upstream agent does not execute
     raw_spans: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
@@ -294,6 +295,7 @@ class AlertRecord:
     risk_level: str = "medium"              # high / medium / low
     pending_block: bool = False             # True in OBSERVE mode, waiting for human
     blocked: bool = False                   # True after block executed
+    held: bool = False                      # Gateway gray-zone hold: the upstream agent is stalled until a human disposes (then pass/block)
     handled: bool = False                   # True once disposed — hidden from alert list
     disposition_id: Optional[str] = None    # Linked disposition record ID after block
     created_at: datetime = field(default_factory=datetime.now)
@@ -317,6 +319,8 @@ class AlertRecord:
             "storyline": self.storyline[:300] if self.storyline else "",
             "pending_block": self.pending_block,
             "blocked": self.blocked,
+            "held": self.held,
+            "hold_id": self.event.event_id if self.held else None,
             "handled": self.handled,
             "disposition_id": self.disposition_id,
             "has_decision_tree": self.decision_tree is not None,
@@ -335,34 +339,34 @@ class DispositionStatus(str, Enum):
 @dataclass
 class DispositionRecord:
     """
-    处置记录 — 记录每次告警的处置动作、操作人、命令及结果.
-    
+    Disposition record — captures the disposition action, operator, command, and result for each alert.
+
     Fields:
-      disposition_id: 处置编号
-      alert_id: 关联告警编号
-      event_id: 关联事件编号
-      operator: 处置人 — "auto"(自动模式) / "admin"(人工确认)
-      action: 处置动作 — "block" / "unblock" / "ignore" / "toggle_rule"
-      command: 下发的具体命令
-      result: 处置结果 — "success" / "failed" / "simulated" / "pending"
-      detail: 结果详情描述
-      triggered_rule: 触发的规则ID
-      risk_level: 风险等级
-      created_at: 处置时间
-      acknowledged_at: 人工确认时间 (OBSERVE 模式下)
+      disposition_id: Disposition ID
+      alert_id: Linked alert ID
+      event_id: Linked event ID
+      operator: Operator — "auto" (auto mode) / "admin" (human confirmation)
+      action: Disposition action — "block" / "unblock" / "ignore" / "toggle_rule"
+      command: The concrete command issued
+      result: Disposition result — "success" / "failed" / "simulated" / "pending"
+      detail: Result detail description
+      triggered_rule: ID of the triggered rule
+      risk_level: Risk level
+      created_at: Disposition time
+      acknowledged_at: Human confirmation time (in OBSERVE mode)
     """
     disposition_id: str
     alert_id: str
     event_id: str
-    operator: str                    # "auto" | "admin" | 自定义
+    operator: str                    # "auto" | "admin" | custom
     action: str                      # "block" | "unblock" | "ignore" | "toggle_rule"
-    command: str                     # 下发的具体命令
+    command: str                     # The concrete command issued
     result: str = DispositionStatus.SIMULATED   # success/failed/simulated/pending
     detail: str = ""
     triggered_rule: str = ""
     risk_level: str = "medium"
-    alert_text: str = ""             # 告警原文（被检 user_input），处置记录页展示
-    mode: str = "observe"            # 处置模式：auto（自动）/ observe（人工确认）
+    alert_text: str = ""             # Original alert text (the inspected user_input), shown on the disposition records page
+    mode: str = "observe"            # Disposition mode: auto / observe (human confirmation)
     created_at: datetime = field(default_factory=datetime.now)
     acknowledged_at: Optional[datetime] = None
 
@@ -390,7 +394,7 @@ class AnomalyType(str, Enum):
     EXCESSIVE_NEGOTIATION = "excessive_negotiation"
     RULE_BYPASS = "rule_bypass"
     REASONING_ERROR = "reasoning_error"
-    COLLUSION = "collusion"  # Agent间共谋
+    COLLUSION = "collusion"  # Collusion between agents
 
 
 @dataclass

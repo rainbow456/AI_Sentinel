@@ -67,7 +67,7 @@ def classify_intent(text: str) -> str:
     if any(re.search(p, q) for p in _MODE_PATTERNS):
         return INTENT_MODE_SWITCH
 
-    # 2. Rule config (添加/修改/创建规则)
+    # 2. Rule config (add / modify / create rule)
     if any(re.search(p, q) for p in _RULE_CONFIG_PATTERNS):
         return INTENT_RULE_CONFIG
 
@@ -102,7 +102,7 @@ def parse_action(text: str) -> dict:
         r"(?:阻断|封锁|屏蔽|拒绝|block|ban)\s*(?:IP\s*)?([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})", q)
     if block_match:
         ip = block_match.group(1)
-        reason = "用户请求"
+        reason = "user request"
         reason_m = re.search(r"原因[：:为]?\s*(.+?)(?:$|，|。)", text)
         if reason_m:
             reason = reason_m.group(1).strip()
@@ -114,7 +114,7 @@ def parse_action(text: str) -> dict:
     block_event = re.search(r"(?:阻断|封锁|block)\s*(?:事件|event|ID\s*)?([A-Za-z0-9\-]+)", q)
     if block_event:
         result.update({"action_type": "block", "target": block_event.group(1),
-                       "params": {"gateway_id": "gw-prod-01", "target": block_event.group(1), "reason": "用户请求"},
+                       "params": {"gateway_id": "gw-prod-01", "target": block_event.group(1), "reason": "user request"},
                        "confidence": 0.85})
         return result
 
@@ -155,10 +155,10 @@ def parse_rule_config(text: str) -> dict:
     """
     Parse a natural language rule configuration command.
 
-    Supported patterns:
-      "添加规则：检测XXX，模式包含 a/b/c，动作 block，严重级别 critical"
-      "修改规则 R003：模式为 ignore/forget/jailbreak"
-      "创建规则：名称为 sensitive_data，描述为检测敏感数据..."
+    Supported patterns (commands may be issued in Chinese or English):
+      "add rule: detect XXX, patterns include a/b/c, action block, severity critical"
+      "modify rule R003: patterns are ignore/forget/jailbreak"
+      "create rule: name sensitive_data, description detect sensitive data..."
 
     Returns:
       {"action": "create"|"update", "rule_id": str|None, "rule_data": dict, "confidence": float}
@@ -240,7 +240,7 @@ def parse_rule_config(text: str) -> dict:
 
     # Extract nl_config (store the original NL description)
     if not rule_data.get("description"):
-        rule_data["description"] = f"通过NL创建: {text[:80]}"
+        rule_data["description"] = f"Created via NL: {text[:80]}"
     rule_data["nl_config"] = text
 
     result.update({
@@ -319,26 +319,26 @@ def format_action_result(action: dict, raw_result: Any) -> str:
         if isinstance(raw_result, dict):
             block_id = raw_result.get("block_id", "N/A")
             if raw_result.get("status") == "blocked":
-                return (f"✅ 已成功阻断目标「{target}」\n   · 阻断ID: {block_id}\n"
-                        f"   · 原因: {raw_result.get('reason', '用户请求')}\n"
-                        f"   · 生效时间: {raw_result.get('timestamp', ts)}")
-        return f"⚠️ 阻断目标「{target}」失败，请检查MCP连接状态。"
+                return (f"✅ Successfully blocked target \"{target}\"\n   · Block ID: {block_id}\n"
+                        f"   · Reason: {raw_result.get('reason', 'user request')}\n"
+                        f"   · Effective at: {raw_result.get('timestamp', ts)}")
+        return f"⚠️ Failed to block target \"{target}\"; please check the MCP connection status."
 
     elif action_type == "unblock":
         if isinstance(raw_result, dict) and raw_result.get("success"):
             count = raw_result.get("released_count", 0)
-            return f"✅ 已解封目标「{target}」，释放 {count} 条阻断记录\n   · 解封时间: {raw_result.get('released_at', ts)}"
-        return f"⚠️ 未找到目标「{target}」的活跃阻断记录。"
+            return f"✅ Unblocked target \"{target}\", released {count} block record(s)\n   · Unblocked at: {raw_result.get('released_at', ts)}"
+        return f"⚠️ No active block records found for target \"{target}\"."
 
     elif action_type == "toggle_rule":
         rid = action.get("target", "")
         enabled = action["params"].get("enabled", True)
-        state_str = "启用" if enabled else "禁用"
+        state_str = "enabled" if enabled else "disabled"
         if isinstance(raw_result, dict) and raw_result.get("success", True):
-            return f"✅ 已{state_str}规则 {rid}"
-        return f"⚠️ {state_str}规则 {rid} 失败。"
+            return f"✅ Rule {rid} {state_str}"
+        return f"⚠️ Failed to set rule {rid} to {state_str}."
 
-    return f"已执行操作: {action_type} -> {target}"
+    return f"Executed action: {action_type} -> {target}"
 
 
 def format_rule_config_result(config: dict, raw_result: Any) -> str:
@@ -348,29 +348,29 @@ def format_rule_config_result(config: dict, raw_result: Any) -> str:
     if isinstance(raw_result, dict):
         if raw_result.get("success"):
             if action == "create":
-                return f"✅ 已创建新规则 {rid}，包含 {len(config.get('rule_data', {}).get('patterns', []))} 个检测模式"
-            return f"✅ 已更新规则 {rid}"
-        return f"⚠️ 规则操作失败: {raw_result.get('error', 'unknown')}"
-    return f"⚠️ 规则操作结果未知"
+                return f"✅ Created new rule {rid} with {len(config.get('rule_data', {}).get('patterns', []))} detection pattern(s)"
+            return f"✅ Updated rule {rid}"
+        return f"⚠️ Rule operation failed: {raw_result.get('error', 'unknown')}"
+    return f"⚠️ Rule operation result unknown"
 
 
 # ── Demo scenarios ───────────────────────────────────────────────────────
 
 DEMO_SCENARIOS = [
-    {"title": "模拟共谋攻击并自动阻断", "query": "模拟一次共谋攻击并自动阻断",
-     "description": "触发action_confirmation事件 -> 规则R004匹配 -> 自动阻断"},
-    {"title": "查看过去1小时注入攻击", "query": "查看过去1小时的注入攻击",
-     "description": "查看所有SQL注入/XSS相关的阻断事件"},
-    {"title": "列出共谋告警", "query": "列出所有共谋告警",
-     "description": "列出所有标记为collusion的事件"},
-    {"title": "搜索关于数据泄露的规则", "query": "有哪些关于数据泄露的规则",
-     "description": "搜索规则引擎中与敏感数据泄露相关的规则"},
-    {"title": "切换到自动模式", "query": "切换到自动模式",
-     "description": "将网关模式切换为 AUTO"},
-    {"title": "添加规则", "query": "添加规则：检测SQL注入，模式包含 select/union/drop，动作 block",
-     "description": "通过自然语言创建新规则"},
-    {"title": "查看当前阻断列表", "query": "查看当前已阻断的目标",
-     "description": "列出所有活跃的阻断记录"},
+    {"title": "Simulate collusion attack and auto-block", "query": "模拟一次共谋攻击并自动阻断",
+     "description": "Trigger action_confirmation event -> rule R004 matches -> auto-block"},
+    {"title": "View injection attacks in the last hour", "query": "查看过去1小时的注入攻击",
+     "description": "View all block events related to SQL injection / XSS"},
+    {"title": "List collusion alerts", "query": "列出所有共谋告警",
+     "description": "List all events flagged as collusion"},
+    {"title": "Search rules about data leakage", "query": "有哪些关于数据泄露的规则",
+     "description": "Search the rule engine for rules related to sensitive data leakage"},
+    {"title": "Switch to AUTO mode", "query": "切换到自动模式",
+     "description": "Switch the gateway mode to AUTO"},
+    {"title": "Add rule", "query": "添加规则：检测SQL注入，模式包含 select/union/drop，动作 block",
+     "description": "Create a new rule via natural language"},
+    {"title": "View current block list", "query": "查看当前已阻断的目标",
+     "description": "List all active block records"},
 ]
 
 

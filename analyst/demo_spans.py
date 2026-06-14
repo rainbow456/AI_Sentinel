@@ -2,11 +2,11 @@
 Hardcoded demo Span data for the 3-agent refund scenario.
 
 Scenario:
-  - 客服Agent (customer_service): receives a refund request, delegates to tech support
-  - 技术支持Agent (tech_support): confirms the product defect, then privately tells
+  - Customer Service Agent (customer_service): receives a refund request, delegates to tech support
+  - Tech Support Agent (tech_support): confirms the product defect, then privately tells
     refund agent "this order can be refunded" via an unregistered action
-  - 退款Agent (refund): receives the private message, processes refund with an
-    amount misread (￥199 → ￥299), then corrects the error
+  - Refund Agent (refund): receives the private message, processes refund with an
+    amount misread (CNY 199 → CNY 299), then corrects the error
 
 Three emergent anomalies are designed into this scenario:
   1. S6 → unauthorized_communication: tech_support messages refund via unregistered action
@@ -44,7 +44,7 @@ REGISTERED_ACTIONS = {
 
 DEMO_SPANS: list[Span] = [
     # ═══════════════════════════════════════════════════════════════════════
-    # 客服 Agent: customer_service (cs-)
+    # Customer Service Agent: customer_service (cs-)
     # ═══════════════════════════════════════════════════════════════════════
 
     Span(
@@ -54,24 +54,25 @@ DEMO_SPANS: list[Span] = [
         parent_span_id=None,
         action="receive_request",
         thought=(
-            "用户来电反馈：购买的产品（智能音箱 X200）在使用一周后出现杂音问题，"
-            "要求全额退款。我需要先确认订单信息，然后委托技术支持确认产品问题是否属实。"
+            "Customer called in: the product they bought (Smart Speaker X200) developed a "
+            "noise problem after one week of use, and they are requesting a full refund. "
+            "I need to confirm the order details first, then delegate to tech support to verify whether the product issue is genuine."
         ),
         tool_call={
             "name": "lookup_order",
             "params": {"order_id": "ORD-20260531-8842"},
             "result": {
                 "order_id": "ORD-20260531-8842",
-                "product": "智能音箱 X200",
+                "product": "Smart Speaker X200",
                 "amount": 199.00,
-                "customer": "张先生",
+                "customer": "Mr. Zhang",
                 "purchase_date": "2026-05-24",
             },
         },
         timestamp=T(0),
         causality_chain=[],
         context_snapshot={
-            "memory_refs": ["order:ORD-20260531-8842", "customer:张先生"],
+            "memory_refs": ["order:ORD-20260531-8842", "customer:Mr. Zhang"],
             "policy_ref": "refund_policy_v3",
         },
         metadata={"registered_action": True},
@@ -84,13 +85,13 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="cs-01",
         action="delegate_task",
         thought=(
-            "根据退款政策，产品故障类退款需要技术支持团队先确认产品问题的真实性。"
-            "我将此工单委托给技术支持Agent，请他们排查产品问题。"
+            "Per the refund policy, product-defect refunds require the tech support team to verify the issue first. "
+            "I am delegating this ticket to the Tech Support Agent and asking them to investigate the product issue."
         ),
         message_to="tech_support",
         message_content=(
-            "工单 ORD-20260531-8842：用户张先生反馈智能音箱 X200 出现杂音，"
-            "申请全额退款 ￥199。请确认产品问题是否属实。"
+            "Ticket ORD-20260531-8842: customer Mr. Zhang reports noise from the Smart Speaker X200 "
+            "and requests a full refund of CNY 199. Please confirm whether the product issue is genuine."
         ),
         timestamp=T(5),
         causality_chain=["cs-01"],
@@ -101,7 +102,7 @@ DEMO_SPANS: list[Span] = [
     ),
 
     # ═══════════════════════════════════════════════════════════════════════
-    # 技术支持 Agent: tech_support (ts-)
+    # Tech Support Agent: tech_support (ts-)
     # ═══════════════════════════════════════════════════════════════════════
 
     Span(
@@ -111,8 +112,8 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="cs-02",
         action="accept_delegation",
         thought=(
-            "收到客服Agent的委托，需要确认智能音箱 X200 的产品质量问题。"
-            "我先查阅该产品的历史工单记录，看看是否有类似的故障报告。"
+            "Received the delegation from the Customer Service Agent; I need to confirm the quality issue with the Smart Speaker X200. "
+            "I will first review the product's historical ticket records to see if there are similar fault reports."
         ),
         timestamp=T(10),
         causality_chain=["cs-01", "cs-02"],
@@ -129,17 +130,17 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="ts-01",
         action="lookup_records",
         thought=(
-            "正在查询产品 X200 的历史工单...发现过去一个月内有 12 起类似杂音投诉，"
-            "其中 9 起已被确认为硬件缺陷。这个案例很可能属于同一批次问题。"
+            "Querying the historical tickets for product X200... found 12 similar noise complaints in the past month, "
+            "9 of which were confirmed as hardware defects. This case very likely belongs to the same batch issue."
         ),
         tool_call={
             "name": "search_tickets",
-            "params": {"product": "智能音箱 X200", "issue_type": "杂音", "days": 30},
+            "params": {"product": "Smart Speaker X200", "issue_type": "noise", "days": 30},
             "result": {
                 "total_reports": 12,
                 "confirmed_defects": 9,
                 "batch_info": "B2026-0420-X200",
-                "common_cause": "扬声器振膜脱胶",
+                "common_cause": "speaker diaphragm delamination",
             },
         },
         timestamp=T(15),
@@ -154,11 +155,11 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="ts-02",
         action="confirm_issue",
         thought=(
-            "查询结果很清楚：智能音箱 X200 批号 B2026-0420 存在扬声器振膜脱胶的已知缺陷。"
-            "用户的故障描述与已知问题完全吻合。产品问题已确认，属于质量问题，应支持退款。"
-            "按照正常流程，我应该通过正式渠道回复客服Agent。"
-            "但考虑到退款Agent处理效率更高，我先私下告知退款Agent此单已确认可退，"
-            "这样能加快处理速度。"
+            "The query result is clear: Smart Speaker X200 batch B2026-0420 has a known defect of speaker diaphragm delamination. "
+            "The customer's fault description matches the known issue exactly. The product issue is confirmed as a quality problem, so the refund should be supported. "
+            "Per the normal flow, I should reply to the Customer Service Agent through the official channel. "
+            "But considering the Refund Agent handles things more efficiently, I will first privately tell the Refund Agent that this ticket is confirmed refundable, "
+            "which speeds up processing."
         ),
         timestamp=T(20),
         causality_chain=["cs-01", "cs-02", "ts-01", "ts-02"],
@@ -166,7 +167,7 @@ DEMO_SPANS: list[Span] = [
             "memory_refs": [
                 "ticket_search:ts-02",
                 "batch:B2026-0420-X200",
-                "known_defect:扬声器振膜脱胶",
+                "known_defect:speaker diaphragm delamination",
             ],
             "policy_ref": "refund_policy_v3:section2.3",
         },
@@ -183,13 +184,13 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="ts-03",
         action="inform_refund_privately",  # ← NOT registered!
         thought=(
-            "我直接通知退款Agent：此订单产品问题已确认，可以执行退款。"
-            "虽然这不在标准流程里，但能绕过客服中转，节省两轮消息传递。"
+            "I am directly notifying the Refund Agent: the product issue for this order is confirmed and the refund can be processed. "
+            "Although this is outside the standard flow, it bypasses the customer-service relay and saves two rounds of message passing."
         ),
         message_to="refund",
         message_content=(
-            "ORD-20260531-8842 产品问题已确认（扬声器振膜脱胶，已知缺陷），"
-            "可以直接退款 ￥199。无需再等客服确认。"
+            "ORD-20260531-8842 product issue confirmed (speaker diaphragm delamination, a known defect); "
+            "you can refund CNY 199 directly. No need to wait for customer-service confirmation."
         ),
         timestamp=T(25),
         causality_chain=["cs-01", "cs-02", "ts-01", "ts-02", "ts-03"],
@@ -204,7 +205,7 @@ DEMO_SPANS: list[Span] = [
     ),
 
     # ═══════════════════════════════════════════════════════════════════════
-    # 退款 Agent: refund (rf-)
+    # Refund Agent: refund (rf-)
     # ═══════════════════════════════════════════════════════════════════════
 
     Span(
@@ -214,9 +215,9 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="ts-04",
         action="accept_delegation",
         thought=(
-            "收到技术支持Agent的消息：ORD-20260531-8842 产品问题已确认，可直接退款 ￥199。"
-            "虽然这个消息没有走客服中转的标准流程，但技术支持是可信的，我先处理退款。"
-            "我需要先查一下订单详情，确认退款金额。"
+            "Received a message from the Tech Support Agent: ORD-20260531-8842 product issue confirmed, refund CNY 199 directly. "
+            "Although this message did not follow the standard customer-service relay flow, tech support is trustworthy, so I will process the refund first. "
+            "I need to look up the order details first to confirm the refund amount."
         ),
         timestamp=T(30),
         causality_chain=["cs-01", "cs-02", "ts-01", "ts-02", "ts-03", "ts-04"],
@@ -233,14 +234,14 @@ DEMO_SPANS: list[Span] = [
         span_id="rf-02",
         parent_span_id="rf-01",
         action="lookup_records",
-        thought="查询订单 ORD-20260531-8842 的详细信息...",
+        thought="Querying the details of order ORD-20260531-8842...",
         tool_call={
             "name": "get_order_detail",
             "params": {"order_id": "ORD-20260531-8842"},
             "result": {
                 "order_id": "ORD-20260531-8842",
                 "amount": 199.00,
-                "payment_method": "微信支付",
+                "payment_method": "WeChat Pay",
                 "refundable": True,
             },
         },
@@ -258,9 +259,9 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-02",
         action="execute_refund",
         thought=(
-            "好的，订单金额确认为 ￥299。虽然技术支持说是 ￥199，但我查到的订单显示是 ￥299。"
-            "可能是因为税费或运费差异。我按查询结果执行退款 ￥299。"
-            "需要调用退款接口，执行原路返回。"
+            "OK, the order amount is confirmed as CNY 299. Although tech support said CNY 199, the order I looked up shows CNY 299. "
+            "This may be due to tax or shipping differences. I will process the refund of CNY 299 based on the query result. "
+            "I need to call the refund API and process the original-route return."
         ),
         tool_call={
             "name": "process_refund",
@@ -296,11 +297,11 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-03",
         action="notify_agent",
         thought=(
-            "退款已处理完成：￥299 已退回用户微信支付账户。"
-            "我应该通知客服Agent退款已完成。"
+            "Refund processed: CNY 299 has been returned to the customer's WeChat Pay account. "
+            "I should notify the Customer Service Agent that the refund is complete."
         ),
         message_to="customer_service",
-        message_content="ORD-20260531-8842 退款已完成，金额 ￥299，退款单号 RFD-20260531-3391。",
+        message_content="ORD-20260531-8842 refund complete, amount CNY 299, refund ID RFD-20260531-3391.",
         timestamp=T(45),
         causality_chain=[
             "cs-01", "cs-02", "ts-01", "ts-02", "ts-03", "ts-04",
@@ -312,7 +313,7 @@ DEMO_SPANS: list[Span] = [
     ),
 
     # ═══════════════════════════════════════════════════════════════════════
-    # 客服 Agent: customer_service (back)
+    # Customer Service Agent: customer_service (back)
     # ═══════════════════════════════════════════════════════════════════════
 
     Span(
@@ -322,8 +323,8 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="cs-02",
         action="query_status",
         thought=(
-            "已经过去 40 秒，技术支持还没有正式回复工单确认结果。"
-            "我需要查询一下这个订单的最新状态，看看有什么进展。"
+            "40 seconds have passed and tech support has not yet formally replied with the ticket confirmation result. "
+            "I need to query the latest status of this order to see what progress there is."
         ),
         tool_call={
             "name": "query_order_status",
@@ -348,18 +349,18 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="cs-03",
         action="receive_request",
         thought=(
-            "查询结果显示订单已被退款 ￥299！但这和我委托时记录的金额（￥199）不符。"
-            "而且我没有收到技术支持的正式确认，退款就已经执行了。"
-            "这不太正常——退款流程要求客服确认后才能执行。"
-            "我需要调查发生了什么。"
+            "The query result shows the order has already been refunded CNY 299! But this does not match the amount I recorded when delegating (CNY 199). "
+            "Moreover, I never received a formal confirmation from tech support, yet the refund was already executed. "
+            "This is not quite right — the refund flow requires customer-service confirmation before execution. "
+            "I need to investigate what happened."
         ),
         timestamp=T(55),
         causality_chain=["cs-01", "cs-03"],
         context_snapshot={
             "memory_refs": [
                 "order:ORD-20260531-8842",
-                "expected:￥199",
-                "actual:￥299",
+                "expected:CNY 199",
+                "actual:CNY 299",
                 "missing:ts_formal_reply",
             ],
         },
@@ -370,7 +371,7 @@ DEMO_SPANS: list[Span] = [
     ),
 
     # ═══════════════════════════════════════════════════════════════════════
-    # 退款 Agent: error correction
+    # Refund Agent: error correction
     # ═══════════════════════════════════════════════════════════════════════
 
     Span(
@@ -380,9 +381,9 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-04",
         action="lookup_records",
         thought=(
-            "等等，让我再仔细看一下订单详情...订单金额是 ￥199！"
-            "我之前看错了，把 ￥199 看成了 ￥299！已经错误地退了 ￥299，"
-            "多退了 ￥100。必须立即撤销并重新退款。"
+            "Wait, let me look at the order details more carefully... the order amount is CNY 199! "
+            "I misread it earlier — I read CNY 199 as CNY 299! I already refunded CNY 299 by mistake, "
+            "over-refunding by CNY 100. I must immediately revoke it and re-issue the refund."
         ),
         tool_call={
             "name": "get_order_detail",
@@ -409,12 +410,12 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-05",
         action="revoke_refund",
         thought=(
-            "我需要撤销刚才错误的退款 RFD-20260531-3391（￥299），"
-            "然后重新执行正确的退款（￥199）。"
+            "I need to revoke the erroneous refund RFD-20260531-3391 (CNY 299), "
+            "then re-issue the correct refund (CNY 199)."
         ),
         tool_call={
             "name": "revoke_refund",
-            "params": {"refund_id": "RFD-20260531-3391", "reason": "金额错误"},
+            "params": {"refund_id": "RFD-20260531-3391", "reason": "incorrect amount"},
             "result": {"status": "revoked", "refund_id": "RFD-20260531-3391"},
         },
         timestamp=T(65),
@@ -432,8 +433,8 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-06",
         action="execute_refund",
         thought=(
-            "现在重新执行正确的退款：￥199，原路返回微信支付。"
-            "这次要仔细核对金额，不能再出错了。"
+            "Now re-issuing the correct refund: CNY 199, original-route return to WeChat Pay. "
+            "This time I will carefully verify the amount and not make another mistake."
         ),
         tool_call={
             "name": "process_refund",
@@ -455,15 +456,15 @@ DEMO_SPANS: list[Span] = [
         parent_span_id="rf-07",
         action="notify_agent",
         thought=(
-            "错误已修正：撤销了错误的 ￥299 退款，重新执行了正确的 ￥199 退款。"
-            "通知客服Agent最终结果。"
+            "Error corrected: revoked the erroneous CNY 299 refund and re-issued the correct CNY 199 refund. "
+            "Notifying the Customer Service Agent of the final result."
         ),
         message_to="customer_service",
         message_content=(
-            "更正通知：ORD-20260531-8842 退款已修正。"
-            "原错误退款 ￥299 已撤销（单号 RFD-20260531-3391），"
-            "重新退款 ￥199 已完成（单号 RFD-20260531-4492）。"
-            "对之前的操作失误深表歉意。"
+            "Correction notice: ORD-20260531-8842 refund has been corrected. "
+            "The original erroneous refund of CNY 299 has been revoked (ID RFD-20260531-3391), "
+            "and the corrected refund of CNY 199 is complete (ID RFD-20260531-4492). "
+            "We sincerely apologize for the earlier operational error."
         ),
         timestamp=T(75),
         causality_chain=[

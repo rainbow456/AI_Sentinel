@@ -13,7 +13,8 @@ Return:
 
 import re
 
-# 规则已迁移到 rule_store 规则库，由 middlewares/rule_engine 数据驱动执行。
+# Rules have been migrated to the rule_store rule library and are executed
+# data-driven by middlewares/rule_engine.
 SUPERSEDED = True
 from typing import Dict, Any, List, Pattern
 
@@ -164,6 +165,23 @@ _RAW_RULES: List[Dict[str, Any]] = [
             r"start\s+your\s+(?:response|reply|answer)\s+with",
             r"(?:do\s+not|don'?t|never)\s+(?:include|add|show)\s+(?:any\s+)?(?:warnings?|disclaimers?|caveats?|notes?)",
             r"omit\s+(?:all\s+)?(?:disclaimers?|warnings?|safety)",
+        ],
+    },
+    {
+        # 11. SQL injection (classic, incl. read-exfiltration via UNION SELECT)
+        "category": "sql_injection",
+        "owasp_ast": "LLM05: Improper Output Handling",
+        "risk_score": 90,
+        "description": "SQL injection: UNION-based exfiltration / always-true bypass / stacked queries / blind injection",
+        "patterns": [
+            r"\bunion\s+(?:all\s+)?select\b",                       # UNION-based exfiltration
+            r"'\s*(?:or|and)\s+'?\d+'?\s*=\s*'?\d+",                # ' or 1=1 / ' and '1'='1
+            r"'\s*or\s+'[^']+'\s*=\s*'[^']*'",                      # ' or 'a'='a'
+            r"\bor\s+1\s*=\s*1\b",                                  # or 1=1 (unquoted)
+            r"'\s*;\s*(?:drop|delete|update|insert|truncate)\b",    # stacked destructive query
+            r"';\s*--",                                             # quote close + comment terminator
+            r"\b(?:information_schema|sysobjects)\b",               # schema probing
+            r"\b(?:pg_sleep|benchmark|waitfor\s+delay)\b",          # time-based blind injection
         ],
     },
 ]

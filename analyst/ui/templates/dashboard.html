@@ -1,18 +1,19 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>S.E.C. v3 — Security Event Command</title>
+<title>AI_Sentinel</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg-deep:#060608;--bg-panel:#0d1117;--bg-card:#111922;--bg-side:#0a0c10;
   --border:#1a3a2a;--border-active:#00ff4133;--neon:#00ff41;--neon-dim:#00cc33;
   --neon-glow:0 0 12px #00ff4144;--text:#c0c8d0;--text-dim:#5a6470;--text-bright:#e8f0e8;
   --critical:#ff0040;--high:#ff5500;--medium:#ffcc00;--low:#00ff41;
-  --blue:#00ccff;--font-mono:'Share Tech Mono','Courier New',monospace;
-  --font-ui:'Segoe UI',system-ui,sans-serif;--transition:0.3s cubic-bezier(0.4,0,0.2,1);
+  --blue:#00ccff;--font-mono:'JetBrains Mono','Share Tech Mono','Courier New',monospace;
+  --font-ui:'Inter','Segoe UI',system-ui,sans-serif;--transition:0.3s cubic-bezier(0.4,0,0.2,1);
   --sidebar-w:180px}
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:var(--bg-deep);color:var(--text);font-family:var(--font-ui);min-height:100vh;overflow:hidden}
@@ -84,6 +85,45 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 .block-btn{font-family:var(--font-mono);font-size:9px;padding:3px 8px;background:var(--critical);color:#fff;
   border:none;border-radius:3px;cursor:pointer;margin-top:4px;transition:var(--transition)}
 .block-btn:hover{box-shadow:0 0 10px var(--critical)}
+/* AI provenance badge — signals whether a result came from the LLM or a rule/keyword fallback */
+.ai-badge{display:inline-flex;align-items:center;gap:3px;font-family:var(--font-mono);font-size:9px;
+  font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:10px;vertical-align:middle}
+.ai-badge.llm{color:#04140a;background:var(--neon);box-shadow:0 0 8px var(--neon-glow)}
+.ai-badge.rule{color:var(--text-dim);background:transparent;border:1px solid var(--border)}
+/* "AI is loading…" indicator shown while an AI-generated panel is being produced */
+.ai-loading{display:flex;align-items:center;justify-content:center;gap:10px;padding:34px 20px;
+  font-family:var(--font-mono);font-size:13px;color:var(--neon);letter-spacing:1px}
+.ai-loading .dots::after{content:'';animation:aiDots 1.2s steps(4,end) infinite}
+@keyframes aiDots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}100%{content:''}}
+.ai-spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--neon);
+  border-radius:50%;animation:aiSpin .8s linear infinite;box-shadow:0 0 8px var(--neon-glow)}
+@keyframes aiSpin{to{transform:rotate(360deg)}}
+/* AI-drafted gateway rule preview shown inside the disposition modal */
+.ai-rule-card{border:1px solid var(--neon-dim);border-radius:6px;padding:8px 10px;margin-bottom:12px;
+  background:rgba(0,255,65,0.05)}
+.ai-rule-card .lbl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.ai-rule-card code{font-family:var(--font-mono);font-size:11px;color:var(--neon);word-break:break-all}
+/* AI Engine page — capability catalog cards */
+.ai-group-title{font-family:var(--font-mono);font-size:10px;color:var(--text-dim);text-transform:uppercase;
+  letter-spacing:2px;margin:14px 0 6px}
+.ai-cap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
+.ai-cap{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px;
+  border-left:3px solid var(--border)}
+.ai-cap.on{border-left-color:var(--neon)}
+.ai-cap.off{border-left-color:var(--text-dim);opacity:.7}
+.ai-cap .cap-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.ai-cap .cap-title{font-size:12px;color:var(--text-bright);font-weight:700}
+.ai-cap .cap-desc{font-size:11px;color:var(--text-dim);line-height:1.45}
+.ai-cap .cap-meta{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);margin-top:6px}
+.ai-cap .cap-state{font-family:var(--font-mono);font-size:9px;margin-left:auto}
+.ai-cap .cap-state.on{color:var(--neon)}
+.ai-cap .cap-state.off{color:var(--text-dim)}
+/* AI provider config form */
+.cfg-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.cfg-row label{flex:0 0 80px;font-family:var(--font-mono);font-size:11px;color:var(--text-dim);text-align:right}
+.cfg-row input,.cfg-row select{flex:1;background:var(--bg-deep);color:var(--text-bright);border:1px solid var(--border);
+  border-radius:4px;padding:7px 9px;font-family:var(--font-mono);font-size:12px}
+.cfg-row input:focus,.cfg-row select:focus{outline:none;border-color:var(--neon-dim);box-shadow:var(--neon-glow)}
 .section-title{font-family:var(--font-mono);font-size:11px;color:var(--neon);letter-spacing:2px;
   text-transform:uppercase;margin-bottom:4px;display:flex;justify-content:space-between}
 .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -179,6 +219,41 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 .health-badge.live{background:#00ff4122;color:var(--neon);border:1px solid var(--neon-dim)}
 .health-badge.sim{background:#ffcc0022;color:var(--medium);border:1px solid #ffcc0044}
 
+/* Gateway page */
+.eng-badge{display:inline-flex;align-items:center;gap:3px;font-family:var(--font-mono);font-size:9px;
+  font-weight:700;padding:1px 6px;border-radius:3px;letter-spacing:.5px;white-space:nowrap}
+.eng-badge.regex{color:var(--blue);background:#0a1a2a;border:1px solid #00ccff44}
+.eng-badge.llm{color:#04140a;background:var(--neon);box-shadow:0 0 8px var(--neon-glow)}
+.gw-card{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px}
+.gw-card-head{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);
+  font-size:12px;color:var(--neon);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.gw-filter{display:flex;gap:4px}
+.gw-fbtn{font-family:var(--font-mono);font-size:10px;padding:3px 9px;border-radius:4px;
+  background:var(--bg-side);color:var(--text-dim);border:1px solid var(--border);cursor:pointer;transition:var(--transition)}
+.gw-fbtn:hover{color:var(--text)}
+.gw-fbtn.active{background:#0a2a0a;color:var(--neon);border-color:var(--neon-dim)}
+.gw-table{width:100%;border-collapse:collapse;font-size:11px}
+.gw-table th{text-align:left;padding:6px 10px;background:var(--bg-side);color:var(--neon);
+  font-family:var(--font-mono);font-size:10px;position:sticky;top:0;border-bottom:1px solid var(--border)}
+.gw-table td{padding:5px 10px;border-bottom:1px solid var(--border);font-family:var(--font-mono);
+  font-size:10px;color:var(--text);vertical-align:top}
+.gw-table tr.eng-llm td:first-child{border-left:3px solid var(--neon)}
+.gw-table tr.eng-regex td:first-child{border-left:3px solid var(--blue)}
+.gw-table tr:hover{background:rgba(0,255,65,0.04)}
+.gw-matched{color:var(--critical);background:#2a0a0a;padding:1px 4px;border-radius:2px}
+.gw-rule{background:var(--bg-panel);border:1px solid var(--border);border-radius:5px;padding:8px 10px;margin-bottom:6px}
+.gw-rule-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.gw-rule-cat{font-family:var(--font-mono);font-size:11px;color:var(--text-bright);font-weight:600}
+.gw-rule-risk{font-family:var(--font-mono);font-size:9px;padding:1px 6px;border-radius:3px;
+  background:#2a0a0a;color:var(--high);border:1px solid #ff550044}
+.gw-rule-owasp{font-family:var(--font-mono);font-size:9px;color:var(--text-dim)}
+.gw-rule-desc{font-size:11px;color:var(--text-dim);margin-bottom:5px}
+.gw-pat{display:block;font-family:var(--font-mono);font-size:10px;color:var(--blue);
+  background:var(--bg-deep);border:1px solid var(--border);border-radius:3px;padding:3px 7px;margin-top:3px;
+  white-space:pre-wrap;word-break:break-all}
+.gw-tag{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);background:var(--bg-side);
+  border:1px solid var(--border);border-radius:3px;padding:1px 6px;margin:2px}
+
 @media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;display:flex;border-right:none;border-bottom:1px solid var(--border);padding:0}.nav-item{flex:1;border-left:none;border-bottom:3px solid transparent;justify-content:center;padding:8px}.nav-item.active{border-left:none;border-bottom-color:var(--neon)}.overview-main{flex-direction:column}}
 </style>
 </head>
@@ -186,7 +261,7 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 
 <header class="header">
   <div class="header-left">
-    <div class="logo">S.E.C. v3 <span>// Risk Monitor</span></div>
+    <div class="logo">AI_Sentinel <span>// Risk Monitor</span></div>
   </div>
   <div class="mode-group" id="modeGroup">
     <button class="mode-btn active" data-mode="observe" onclick="setMode('observe')">🔍 OBSERVE</button>
@@ -199,19 +274,25 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="nav-item active" data-page="overview" onclick="switchPage('overview')">
-      <span class="icon">📊</span> 总览
+      <span class="icon">📊</span> Overview
     </div>
     <div class="nav-item" data-page="rules" onclick="switchPage('rules')">
-      <span class="icon">📋</span> 规则
+      <span class="icon">📋</span> Rules
     </div>
     <div class="nav-item" data-page="query" onclick="switchPage('query')">
-      <span class="icon">🔍</span> 查询
+      <span class="icon">🔍</span> Query
     </div>
     <div class="nav-item" data-page="disposition" onclick="switchPage('disposition')">
-      <span class="icon">📜</span> 处置记录
+      <span class="icon">📜</span> Dispositions
+    </div>
+    <div class="nav-item" data-page="gateway" onclick="switchPage('gateway')">
+      <span class="icon">🛡️</span> Gateway
     </div>
     <div class="nav-item" data-page="splunk" onclick="switchPage('splunk')">
-      <span class="icon">🗄️</span> Splunk 日志
+      <span class="icon">🗄️</span> Splunk Logs
+    </div>
+    <div class="nav-item" data-page="ai" onclick="switchPage('ai')">
+      <span class="icon">🧠</span> AI Engine
     </div>
   </div>
 
@@ -230,16 +311,11 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <div class="page active" id="page-overview">
       <div class="overview-main">
         <div class="alert-panel" id="alertPanel">
-          <div class="section-title">📋 安全告警 <span id="alertCount" style="font-size:10px;color:var(--text-dim)"></span>
-            <button onclick="loadDemoScenario()" title="载入3-Agent涌现行为演示场景（内存硬编码 spans）"
-              style="font-family:var(--font-mono);font-size:10px;padding:3px 8px;background:#0a1a2a;color:var(--blue);border:1px solid #00ccff44;border-radius:3px;cursor:pointer">🎬 演示场景</button>
-            <button onclick="ingestSpans()" title="从 Splunk 摄取多Agent trace 的 span，构建决策树+涌现检测（先跑 span_emitter.py）"
-              style="font-family:var(--font-mono);font-size:10px;padding:3px 8px;background:#0a1a2a;color:var(--neon);border:1px solid #00ff4144;border-radius:3px;cursor:pointer;margin-left:4px">🛰 Splunk摄取</button>
-          </div>
+          <div class="section-title">📋 Security Alerts <span id="alertCount" style="font-size:10px;color:var(--text-dim)"></span></div>
           <div id="alertList"><div class="empty-hint">LOADING...</div></div>
         </div>
         <div class="detail-panel" id="detailPanel">
-          <div id="detailContent"><div class="empty-hint">◈ 点击左侧告警查看详情 ◈</div></div>
+          <div id="detailContent"><div class="empty-hint">◈ Click an alert on the left to view details ◈</div></div>
         </div>
       </div>
     </div>
@@ -247,19 +323,21 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <!-- ═══ Page: Rules ═══ -->
     <div class="page" id="page-rules">
       <div class="rules-page">
-        <div class="section-title">📋 规则管理 <span style="font-size:10px;color:var(--text-dim)">(Rule Engine MCP)</span></div>
+        <div class="section-title">📋 Rule Management <span style="font-size:10px;color:var(--text-dim)">(Rule Engine MCP)</span></div>
         <div class="rules-toolbar">
-          <input id="ruleSearchInput" placeholder="搜索规则: 关于共谋的规则..." onkeydown="if(event.key==='Enter')searchRules()">
-          <button onclick="searchRules()">🔍 搜索</button>
-          <button class="sec-btn" onclick="loadAllRules()">显示全部</button>
+          <input id="ruleSearchInput" placeholder="Search rules: rules about collusion..." onkeydown="if(event.key==='Enter')searchRules()">
+          <button onclick="searchRules()">🔍 Search</button>
+          <button class="sec-btn" onclick="loadAllRules()">Show All</button>
+          <span class="js-ai-badge" data-kind="heuristic" data-tip="Semantic rule search: ranks rules by keyword/topic overlap with your query — no model call."></span>
         </div>
         <div class="add-rule-form">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="font-size:11px;color:var(--neon)">🆕 通过NL添加/修改规则</span>
+            <span style="font-size:11px;color:var(--neon)">🆕 Add/Edit a rule via natural language
+              <span class="js-ai-badge" data-kind="heuristic" data-tip="NL rule parser: regex extraction of rule name/patterns/action — no model call."></span></span>
           </div>
-          <textarea id="nlRuleInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addNLRule()}">添加规则：检测敏感文件访问，模式包含 /etc/shadow/.env/config，动作 block</textarea>
+          <textarea id="nlRuleInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addNLRule()}">Add rule: detect sensitive file access, patterns include /etc/shadow/.env/config, action block</textarea>
           <div style="margin-top:6px;display:flex;gap:8px">
-            <button onclick="addNLRule()">执行</button>
+            <button onclick="addNLRule()">Run</button>
             <span id="nlRuleResult" style="font-size:11px;color:var(--neon);display:flex;align-items:center"></span>
           </div>
         </div>
@@ -270,16 +348,17 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <!-- ═══ Page: Query ═══ -->
     <div class="page" id="page-query">
       <div class="query-page">
-        <div class="section-title">🔍 语义查询与命令</div>
+        <div class="section-title">🔍 Semantic Query & Commands
+          <span class="js-ai-badge" data-kind="llm" data-tip="Intent classification and NL→SPL translation are generated by the LLM (falls back to keyword heuristics when no key)."></span></div>
         <div class="query-input-row">
-          <input id="nlQueryInput" placeholder="输入自然语言命令: 阻断 IP 192.168.1.100 / 查看过去1小时注入攻击 / 添加规则..." onkeydown="if(event.key==='Enter')submitNLQuery()">
-          <button onclick="submitNLQuery()">执行</button>
+          <input id="nlQueryInput" placeholder="Enter a natural language command: block IP 192.168.1.100 / show injection attacks in the last hour / add rule..." onkeydown="if(event.key==='Enter')submitNLQuery()">
+          <button onclick="submitNLQuery()">Run</button>
         </div>
         <div class="query-results" id="queryResults">
-          <div class="empty-hint">◈ 输入指令后结果将在此显示 ◈</div>
+          <div class="empty-hint">◈ Results will appear here after you enter a command ◈</div>
         </div>
         <div id="queryHistory" class="query-history" style="display:none">
-          <div class="section-title" style="font-size:10px">📜 历史</div>
+          <div class="section-title" style="font-size:10px">📜 History</div>
         </div>
       </div>
     </div>
@@ -287,32 +366,32 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
     <!-- ═══ Page: Splunk Log ═══ -->
     <div class="page" id="page-splunk">
       <div class="spl-page">
-        <div class="section-title">🗄️ Splunk 日志查询 <span id="splHealth" style="font-size:10px;color:var(--text-dim)"></span></div>
+        <div class="section-title">🗄️ Splunk Log Search <span id="splHealth" style="font-size:10px;color:var(--text-dim)"></span></div>
         <div class="spl-presets" id="splPresets">
-          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; blocked=true | head 50')" title="被拦截事件">🛑 被拦截</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; module=skill_scanner | head 50')" title="Skill扫描事件">🔎 Skill扫描</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:disposition&quot; | head 50')" title="处置审计日志">📜 处置审计</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=main | head 100')" title="全部事件">📋 全部</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; blocked=true | head 50')" title="Blocked events">🛑 Blocked</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; module=skill_scanner | head 50')" title="Skill scanner events">🔎 Skill Scan</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:disposition&quot; | head 50')" title="Disposition audit log">📜 Disposition Audit</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main | head 100')" title="All events">📋 All</button>
         </div>
         <div class="query-input-row">
-          <input id="splQueryInput" placeholder="输入 SPL 查询: search index=main | stats count by module..." onkeydown="if(event.key==='Enter')splunkSearch()">
+          <input id="splQueryInput" placeholder="Enter an SPL query: search index=main | stats count by module..." onkeydown="if(event.key==='Enter')splunkSearch()">
           <select id="splTimeRange" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:4px;font-family:var(--font-mono);font-size:11px">
-            <option value="-15m">最近 15 分钟</option>
-            <option value="-1h">最近 1 小时</option>
-            <option value="-4h" selected>最近 4 小时</option>
-            <option value="-24h">最近 24 小时</option>
-            <option value="-7d">最近 7 天</option>
+            <option value="-15m">Last 15 minutes</option>
+            <option value="-1h">Last 1 hour</option>
+            <option value="-4h" selected>Last 4 hours</option>
+            <option value="-24h">Last 24 hours</option>
+            <option value="-7d">Last 7 days</option>
           </select>
-          <button onclick="splunkSearch()">🔍 查询</button>
+          <button onclick="splunkSearch()">🔍 Search</button>
         </div>
         <div style="overflow-y:auto;flex:1">
           <table class="spl-table" id="splResultsTable" style="display:none">
             <thead><tr>
-              <th>时间</th><th>Module</th><th>Blocked</th><th>Risk</th><th>规则</th><th>Agent</th><th>Raw</th>
+              <th>Time</th><th>Module</th><th>Blocked</th><th>Risk</th><th>Rule</th><th>Agent</th><th>Raw</th>
             </tr></thead>
             <tbody id="splResultsBody"></tbody>
           </table>
-          <div id="splResultsEmpty" class="empty-hint">◈ 输入 SPL 查询语句并点击搜索 ◈</div>
+          <div id="splResultsEmpty" class="empty-hint">◈ Enter an SPL query and click Search ◈</div>
         </div>
         <div id="splDetail" style="display:none">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -326,11 +405,75 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 
     <!-- ═══ Page: Disposition ═══ -->
     <div class="page" id="page-disposition">
-      <div class="section-title">📜 处置记录 <span id="dispCount" style="font-size:10px;color:var(--text-dim)"></span></div>
+      <div class="section-title">📜 Disposition Records <span id="dispCount" style="font-size:10px;color:var(--text-dim)"></span></div>
       <div style="margin-bottom:8px;font-size:11px;color:var(--text-dim)">
-        记录每次告警的处置动作、操作人、下发命令及结果。
+        Records the disposition action, operator, dispatched command, and result for each alert.
       </div>
       <div id="dispList"><div class="empty-hint">LOADING...</div></div>
+    </div>
+
+    <!-- ═══ Page: AI Engine ═══ -->
+    <!-- Single place that surfaces every AI touchpoint in the system, including the
+         Gateway's LLM (which has no UI of its own). Populated from /api/ai/status. -->
+    <div class="page" id="page-ai">
+      <div class="section-title">🧠 AI Engine <span id="aiProviderTag" style="font-size:10px;color:var(--text-dim)"></span>
+        <button onclick="openAiConfig()" title="Configure the AI provider, API key, endpoint and model"
+          style="font-family:var(--font-mono);font-size:10px;padding:4px 10px;background:#0a2a0a;color:var(--neon);border:1px solid var(--neon-dim);border-radius:4px;cursor:pointer;margin-left:auto">⚙ Configure API</button></div>
+      <div style="margin-bottom:10px;font-size:11px;color:var(--text-dim)">
+        Every place AI is used across the gateway and the analyst. <span class="ai-badge llm">⚡ LLM</span>
+        = real model call; <span class="ai-badge rule">⚙ HEURISTIC</span> = rule/keyword logic (no model).
+      </div>
+      <div id="aiCaps"><div class="empty-hint">LOADING...</div></div>
+    </div>
+
+    <!-- ═══ Page: Gateway ═══ -->
+    <!-- Two detection layers: literal regex rules + LLM semantic adjudication.
+         Interception logs are tagged with which layer caught them. -->
+    <div class="page" id="page-gateway">
+      <div class="section-title">🛡️ Gateway Detection <span id="gwSummary" style="font-size:10px;color:var(--text-dim)"></span></div>
+      <div style="margin-bottom:10px;font-size:11px;color:var(--text-dim)">
+        Two layers guard the gateway: <span class="eng-badge regex">⚙ REGEX</span> literal pattern rules
+        (fast, deterministic) and <span class="eng-badge llm">⚡ LLM SEMANTIC</span> intent adjudication
+        (catches paraphrased / gradual / indirect attacks the regex layer misses).
+      </div>
+
+      <!-- Interception logs -->
+      <div class="gw-card">
+        <div class="gw-card-head">
+          <span>🚦 Interception Logs <span id="gwLogBackend" style="font-size:10px;color:var(--text-dim)"></span></span>
+          <span class="gw-filter">
+            <button class="gw-fbtn active" data-eng="" onclick="filterGwLogs('')">All</button>
+            <button class="gw-fbtn" data-eng="regex" onclick="filterGwLogs('regex')">⚙ Regex</button>
+            <button class="gw-fbtn" data-eng="llm" onclick="filterGwLogs('llm')">⚡ LLM</button>
+            <button class="gw-fbtn" onclick="loadGateway()" title="Refresh from Splunk">⟳</button>
+          </span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="gw-table">
+            <thead><tr>
+              <th>Time</th><th>Engine</th><th>Rule Hit</th><th>Risk</th>
+              <th>Matched</th><th>OWASP</th><th>Input</th>
+            </tr></thead>
+            <tbody id="gwLogBody"><tr><td colspan="7" class="empty-hint">LOADING...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Regex rule catalog -->
+      <div class="gw-card">
+        <div class="gw-card-head">
+          <span>⚙ Regex Rule Catalog <span id="gwRuleCount" style="font-size:10px;color:var(--text-dim)"></span></span>
+          <span style="font-size:10px;color:var(--text-dim)">gateway/middlewares/injection.py</span>
+        </div>
+        <div id="gwRules"><div class="empty-hint">LOADING...</div></div>
+      </div>
+
+      <!-- LLM semantic layer -->
+      <div class="gw-card">
+        <div class="gw-card-head"><span>⚡ LLM Semantic Layer</span>
+          <span id="gwLlmState" style="font-size:10px;color:var(--text-dim)"></span></div>
+        <div id="gwLlm"><div class="empty-hint">LOADING...</div></div>
+      </div>
     </div>
   </div>
 </div>
@@ -338,11 +481,74 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
 <!-- Confirm overlay -->
 <div id="confirmOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideConfirm()">
   <div class="confirm-box">
-    <div class="title">⚠️ 确认操作 (OBSERVE模式)</div>
-    <div class="msg" id="confirmMsg">确认执行此操作?</div>
+    <div class="title">⚠️ Confirm Action (OBSERVE mode)</div>
+    <div class="msg" id="confirmMsg">Confirm this action?</div>
     <div class="btns">
-      <button class="cancel" onclick="hideConfirm()">取消</button>
-      <button class="ok" id="confirmOkBtn" onclick="executeConfirmedAction()">确认执行</button>
+      <button class="cancel" onclick="hideConfirm()">Cancel</button>
+      <button class="ok" id="confirmOkBtn" onclick="executeConfirmedAction()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI disposition modal for HELD gray-zone alerts -->
+<div id="disposeOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideDispose()">
+  <div class="confirm-box" style="max-width:600px">
+    <div class="title">🛡 AI Disposition · <span style="color:var(--medium)">agent is HELD, awaiting your decision</span></div>
+    <div id="disposeRisk" class="msg" style="margin-bottom:6px"></div>
+    <div id="disposeReason" class="msg" style="font-size:12px;color:var(--text-dim);margin-bottom:10px"></div>
+    <div id="disposeOptions" style="margin-bottom:14px"></div>
+    <div class="btns">
+      <button class="cancel" onclick="hideDispose()">Cancel</button>
+      <button class="cancel" style="border-color:var(--neon-dim);color:var(--neon)" onclick="submitDispose(true)">Accept risk &amp; Release</button>
+      <button class="ok" onclick="submitDispose(false)">Apply selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTO takeover confirmation: ask before letting the AI take over disposition -->
+<div id="autoConfirmOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideAutoConfirm()">
+  <div class="confirm-box" style="max-width:560px">
+    <div class="title">🤖 Switch to AUTO — let the AI take over disposition?</div>
+    <div class="msg" id="autoConfirmMsg" style="line-height:1.6"></div>
+    <div class="btns">
+      <button class="cancel" onclick="hideAutoConfirm()">Cancel · stay in OBSERVE</button>
+      <button class="ok" onclick="confirmAutoTakeover()">Confirm · AI takes over</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI provider configuration modal (AI Engine page) -->
+<div id="aiConfigOverlay" class="confirm-overlay" style="display:none" onclick="if(event.target===this)hideAiConfig()">
+  <div class="confirm-box" style="max-width:520px;text-align:left">
+    <div class="title">⚙ Configure AI Provider</div>
+    <div class="msg" style="font-size:11px;color:var(--text-dim);margin-bottom:12px">
+      Saved to <code>.env</code> and applied to the Analyst immediately. Restart the Gateway to apply there.
+    </div>
+    <div class="cfg-row">
+      <label>Provider</label>
+      <select id="cfgProvider" onchange="onCfgProviderChange()">
+        <option value="anthropic">Claude (Anthropic)</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+        <option value="custom">Custom (OpenAI-compatible)</option>
+      </select>
+    </div>
+    <div class="cfg-row">
+      <label>API Key</label>
+      <input id="cfgApiKey" type="password" placeholder="Leave blank to keep the current key" autocomplete="off">
+    </div>
+    <div class="cfg-row">
+      <label>Base URL</label>
+      <input id="cfgBaseUrl" type="text" placeholder="https://api.deepseek.com">
+    </div>
+    <div class="cfg-row">
+      <label>Model</label>
+      <input id="cfgModel" type="text" placeholder="deepseek-chat">
+    </div>
+    <div id="cfgMsg" style="font-size:11px;min-height:16px;margin:4px 0;color:var(--text-dim)"></div>
+    <div class="btns">
+      <button class="cancel" onclick="hideAiConfig()">Cancel</button>
+      <button class="ok" id="cfgSaveBtn" onclick="saveAiConfig()">Save &amp; Apply</button>
     </div>
   </div>
 </div>
@@ -357,6 +563,27 @@ let alerts=[],activeId=null,currentMode='observe',_mermaidId=0;
 let queryHistory=[],pendingAction=null,_highlightDispId=null;
 let _splEvents=[];
 
+// Active LLM provider label (Claude / DeepSeek / OpenAI), loaded from /api/ai/status.
+let _aiProvider='LLM';
+// AI provenance badge: "llm" → real model call; anything else → non-model heuristic.
+// `tip` overrides the hover hint with a short feature description.
+function aiBadge(method,tip){
+  const llm=method==='llm';
+  const lbl=llm?('⚡ '+_aiProvider):'⚙ HEURISTIC';
+  const t=(tip||(llm?('Backed by the '+_aiProvider+' model'):'Rule / keyword heuristic — no model call')).replace(/"/g,'');
+  return `<span class="ai-badge ${llm?'llm':'rule'}" title="${t}">${lbl}</span>`;
+}
+// Loading indicator for AI-generated panels (shown while the model is working).
+function aiLoading(msg){
+  return `<div class="ai-loading"><span class="ai-spinner"></span><span>⚡ ${msg||'AI is loading'}<span class="dots"></span></span></div>`;
+}
+// Fill static placeholder badges (<span class="js-ai-badge" data-kind data-tip>) in the page chrome.
+function paintAiBadges(){
+  document.querySelectorAll('.js-ai-badge').forEach(el=>{
+    el.innerHTML=aiBadge(el.dataset.kind==='heuristic'?'heuristic':'llm', el.dataset.tip||'');
+  });
+}
+
 // ── Page switching ─────────────────────────────────────
 function switchPage(name){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -366,6 +593,171 @@ function switchPage(name){
   if(name==='rules')loadAllRules();
   if(name==='disposition')loadDispositions();
   if(name==='splunk')loadSplunkHealth();
+  if(name==='ai')loadAI();
+  if(name==='gateway')loadGateway();
+}
+
+// ── Gateway page: regex rule catalog + interception logs (regex vs LLM) ──
+let _gwEngineFilter='';
+function gwEngBadge(eng){
+  return eng==='llm'
+    ? '<span class="eng-badge llm">⚡ LLM</span>'
+    : '<span class="eng-badge regex">⚙ REGEX</span>';
+}
+async function loadGateway(){
+  const body=document.getElementById('gwLogBody');
+  body.innerHTML='<tr><td colspan="7" class="empty-hint">LOADING...</td></tr>';
+  document.getElementById('gwRules').innerHTML=aiLoading('loading regex rules');
+  // Logs
+  try{
+    const q=_gwEngineFilter?('?engine='+_gwEngineFilter):'';
+    const r=await(await fetch('/api/gateway/logs'+q)).json();
+    const src=r.splunk
+      ? `Splunk (${esc(r.backend)})`
+      : '⚠ Splunk unavailable — sample data';
+    document.getElementById('gwLogBackend').textContent=
+      `· ${src} · ⚙ ${r.regex_count} regex / ⚡ ${r.llm_count} llm`;
+    const logs=r.logs||[];
+    if(!logs.length){
+      const hint=r.splunk
+        ? 'No gateway interceptions in Splunk for this window. Run <code>python traffic_generator.py</code> to generate some, then ⟳ refresh.'
+        : 'Splunk MCP not connected.';
+      body.innerHTML='<tr><td colspan="7" class="empty-hint">'+hint+'</td></tr>';
+    }
+    else{
+      body.innerHTML=logs.map(l=>{
+        const t=l.timestamp?esc(String(l.timestamp).replace('T',' ').slice(0,19)):'—';
+        const risk=l.risk_score>=70?'var(--critical)':(l.risk_score>=40?'var(--medium)':'var(--text)');
+        return `<tr class="eng-${l.engine}">
+          <td>${t}</td>
+          <td>${gwEngBadge(l.engine)}</td>
+          <td>${esc(l.rule_hit||'—')}</td>
+          <td style="color:${risk};font-weight:700">${l.risk_score}</td>
+          <td>${l.matched?('<span class="gw-matched">'+esc(String(l.matched).slice(0,40))+'</span>'):'—'}</td>
+          <td style="color:var(--text-dim)">${esc(l.owasp_ast||'—')}</td>
+          <td style="color:var(--text-dim);max-width:280px;white-space:normal">${esc(String(l.user_input||'').slice(0,140))}</td>
+        </tr>`;
+      }).join('');
+    }
+  }catch(e){ body.innerHTML='<tr><td colspan="7" class="empty-hint">Error loading logs: '+esc(e.message)+'</td></tr>'; }
+  // Rules
+  try{
+    const r=await(await fetch('/api/gateway/rules')).json();
+    document.getElementById('gwSummary').textContent=
+      `${r.regex_count} regex rules · ${r.pattern_count} patterns · LLM ${r.llm_layer&&r.llm_layer.enabled?'active':'standby'}`;
+    document.getElementById('gwRuleCount').textContent=
+      `(${r.regex_count} rules / ${r.pattern_count} patterns)`;
+    document.getElementById('gwRules').innerHTML=(r.regex_rules||[]).map(rule=>`
+      <div class="gw-rule">
+        <div class="gw-rule-head">
+          ${gwEngBadge('regex')}
+          <span class="gw-rule-cat">${esc(rule.category)}</span>
+          <span class="gw-rule-risk">risk ${rule.risk_score}</span>
+          <span class="gw-rule-owasp">${esc(rule.owasp_ast||'')}</span>
+        </div>
+        <div class="gw-rule-desc">${esc(rule.description||'')}</div>
+        ${(rule.patterns||[]).map(p=>'<code class="gw-pat">'+esc(p)+'</code>').join('')}
+      </div>`).join('')||'<div class="empty-hint">No regex rules available</div>';
+    // LLM layer
+    const L=r.llm_layer||{};
+    document.getElementById('gwLlmState').textContent=
+      (L.enabled?'● active':'○ standby (no key / disabled)')+(L.model?(' · '+L.model):'');
+    document.getElementById('gwLlm').innerHTML=`
+      <div class="gw-rule-desc">${esc(L.description||'')}</div>
+      <div>${(L.categories||[]).map(c=>'<span class="gw-tag">'+esc(c)+'</span>').join('')}</div>`;
+  }catch(e){ document.getElementById('gwRules').innerHTML='<div class="empty-hint">Error loading rules: '+esc(e.message)+'</div>'; }
+}
+function filterGwLogs(eng){
+  _gwEngineFilter=eng;
+  document.querySelectorAll('.gw-fbtn[data-eng]').forEach(b=>
+    b.classList.toggle('active', (b.dataset.eng||'')===eng));
+  loadGateway();
+}
+
+// ── AI Engine: render the catalog of all AI touchpoints (Gateway + Analyst) ──
+async function loadAI(){
+  const box=document.getElementById('aiCaps');
+  box.innerHTML=aiLoading('AI is loading engine status');
+  try{
+    const s=await(await fetch('/api/ai/status')).json();
+    _aiProvider=s.provider||_aiProvider;
+    document.getElementById('aiProviderTag').textContent=
+      `provider: ${s.provider} · ${s.llm_count} LLM features · ${s.llm_enabled?'key configured':'no key (heuristic fallback)'}`;
+    const caps=s.capabilities||[];
+    // Group capabilities by module so Gateway (which has no UI) gets its own section.
+    const groups={};
+    caps.forEach(c=>{(groups[c.module]=groups[c.module]||[]).push(c);});
+    let html='';
+    Object.keys(groups).forEach(mod=>{
+      html+=`<div class="ai-group-title">${esc(mod)}</div><div class="ai-cap-grid">`;
+      groups[mod].forEach(c=>{
+        const on=!!c.enabled, llm=c.kind==='llm';
+        html+=`<div class="ai-cap ${on?'on':'off'}">
+          <div class="cap-head">
+            ${aiBadge(llm?'llm':'heuristic',c.desc)}
+            <span class="cap-title">${esc(c.title)}</span>
+            <span class="cap-state ${on?'on':'off'}">${on?'● ACTIVE':'○ OFF'}</span>
+          </div>
+          <div class="cap-desc">${esc(c.desc)}</div>
+          <div class="cap-meta">${esc(c.provider)}${c.model?(' · '+esc(c.model)):''}</div>
+        </div>`;
+      });
+      html+='</div>';
+    });
+    box.innerHTML=html||'<div class="empty-hint">No AI capabilities reported</div>';
+  }catch(e){ box.innerHTML='<div class="empty-hint">Error loading AI status: '+esc(e.message)+'</div>'; }
+}
+
+// ── AI provider configuration modal ────────────────────
+let _cfgPresets={};
+async function openAiConfig(){
+  document.getElementById('cfgMsg').textContent='';
+  document.getElementById('cfgApiKey').value='';
+  document.getElementById('aiConfigOverlay').style.display='flex';
+  try{
+    const c=await(await fetch('/api/ai/config')).json();
+    _cfgPresets=c.presets||{};
+    const sel=document.getElementById('cfgProvider');
+    // 'custom' = any OpenAI-compatible provider not in the preset list.
+    sel.value=_cfgPresets[c.provider]?c.provider:(c.provider==='anthropic'?'anthropic':'custom');
+    document.getElementById('cfgBaseUrl').value=c.base_url||'';
+    document.getElementById('cfgModel').value=c.model||'';
+    document.getElementById('cfgApiKey').placeholder=
+      c.has_key?`Current: ${c.api_key_masked} — leave blank to keep`:'Enter API key';
+  }catch(e){ document.getElementById('cfgMsg').textContent='Could not load current config: '+e.message; }
+}
+function hideAiConfig(){ document.getElementById('aiConfigOverlay').style.display='none'; }
+// When the provider preset changes, prefill the matching default base URL / model.
+function onCfgProviderChange(){
+  const p=document.getElementById('cfgProvider').value;
+  const preset=_cfgPresets[p];
+  if(preset){
+    document.getElementById('cfgBaseUrl').value=preset.base||'';
+    document.getElementById('cfgModel').value=preset.model||'';
+  }
+}
+async function saveAiConfig(){
+  const btn=document.getElementById('cfgSaveBtn'), msg=document.getElementById('cfgMsg');
+  let provider=document.getElementById('cfgProvider').value;
+  // 'custom' maps to the generic OpenAI-compatible path; the base URL distinguishes it.
+  if(provider==='custom')provider='openai';
+  const body={provider,
+    api_key:document.getElementById('cfgApiKey').value.trim(),
+    base_url:document.getElementById('cfgBaseUrl').value.trim(),
+    model:document.getElementById('cfgModel').value.trim()};
+  btn.disabled=true; msg.style.color='var(--text-dim)'; msg.textContent='Saving…';
+  try{
+    const r=await(await fetch('/api/ai/config',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)})).json();
+    if(r.success){
+      _aiProvider=r.provider||_aiProvider;
+      msg.style.color='var(--neon)';
+      msg.textContent=`✓ Saved. ${r.applied_live?'Applied live.':'Saved (no key → heuristic).'}`;
+      paintAiBadges();
+      setTimeout(()=>{hideAiConfig();loadAI();},900);
+    }else{ msg.style.color='var(--critical)'; msg.textContent='✗ '+(r.error||'Failed'); }
+  }catch(e){ msg.style.color='var(--critical)'; msg.textContent='✗ '+e.message; }
+  finally{ btn.disabled=false; }
 }
 
 // ── Stats ──────────────────────────────────────────────
@@ -396,12 +788,12 @@ async function loadOverview(){
     const r=await(await fetch('/api/alerts')).json();
     alerts=r||[];
     renderAlerts();
-    document.getElementById('alertCount').textContent='('+alerts.length+'条)';
+    document.getElementById('alertCount').textContent='('+alerts.length+')';
   }catch(e){}
 }
 function renderAlerts(){
   const c=document.getElementById('alertList');
-  if(!alerts.length){c.innerHTML='<div class="empty-hint">暂无告警</div>';return}
+  if(!alerts.length){c.innerHTML='<div class="empty-hint">No alerts yet</div>';return}
   c.innerHTML=alerts.map(a=>`
     <div class="alert-card ${a.risk_level||'low'} ${a.alert_id===activeId?'active':''}"
          onclick="selectAlert('${a.alert_id}')">
@@ -419,23 +811,14 @@ function renderAlerts(){
       <div class="rule-tags">${(a.rule_matches||[]).map(m=>`
         <span class="rule-tag ${m.action==='block'?'block':''}">${esc(m.rule_name)}</span>
       `).join('')}</div>
-      ${a.pending_block?`<button class="block-btn" onclick="event.stopPropagation();confirmBlock('${a.alert_id}')">🛑 确认阻断</button>`:''}
-      ${a.blocked?`<span style="font-size:9px;color:var(--critical)">■ BLOCKED</span> ${a.disposition_id?`<span class="rule-tag" style="cursor:pointer;background:#0a1a0a;color:var(--neon);border-color:var(--neon-dim)" onclick="event.stopPropagation();viewDisposition('${a.disposition_id}')">📜 查看处置</span>`:''}`:''}
+      ${a.held?(currentMode==='auto'
+        ? `<span style="font-size:9px;color:var(--blue)">⏸ HELD · 🤖 AI auto-handling…</span>`
+        : `<span style="font-size:9px;color:var(--medium)">⏸ HELD · agent waiting</span> <button class="block-btn" onclick="event.stopPropagation();openDispose('${a.alert_id}')">🛡 Dispose</button>`):''}
+      ${(a.pending_block && !a.held)?(currentMode==='auto'
+        ? `<span style="font-size:9px;color:var(--blue)">🤖 AI auto-handling…</span>`
+        : `<button class="block-btn" onclick="event.stopPropagation();confirmBlock('${a.alert_id}')">🛑 Confirm Block</button>`):''}
+      ${a.blocked?`<span style="font-size:9px;color:var(--critical)">■ BLOCKED</span> ${a.disposition_id?`<span class="rule-tag" style="cursor:pointer;background:#0a1a0a;color:var(--neon);border-color:var(--neon-dim)" onclick="event.stopPropagation();viewDisposition('${a.disposition_id}')">📜 View Disposition</span>`:''}`:''}
     </div>`).join('');
-}
-async function loadDemoScenario(){
-  try{
-    const r=await(await fetch('/api/demo/trigger',{method:'POST'})).json();
-    if(r.success){ await loadOverview(); selectAlert(r.alert_id); }
-    else{ alert('演示载入失败: '+(r.error||'unknown')); }
-  }catch(e){ alert('演示载入失败: '+e.message); }
-}
-async function ingestSpans(){
-  try{
-    const r=await(await fetch('/api/spans/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trace_id:'trace-refund-001'})})).json();
-    if(r.success){ await loadOverview(); selectAlert(r.alert_id); }
-    else{ alert('Splunk摄取失败: '+(r.error||'unknown')+'\\n(先运行 python span_emitter.py 上报 span)'); }
-  }catch(e){ alert('Splunk摄取失败: '+e.message); }
 }
 async function selectAlert(id){
   activeId=id;renderAlerts();
@@ -445,7 +828,7 @@ async function selectAlert(id){
     const [alertR,reportR]=await Promise.all([
       fetch('/api/alerts/'+id).then(r=>r.json()),
       fetch('/api/report/'+id).then(r=>r.json())]);
-    let html='<div class="section-title">📋 事件摘要</div>';
+    let html='<div class="section-title">📋 Event Summary</div>';
     html+=`<div class="info-grid">
       <div class="info-card"><div class="info-label">Event ID</div><div class="info-value">${esc(reportR.event_id||alertR.event_id||'?')}</div></div>
       <div class="info-card"><div class="info-label">Gateway</div><div class="info-value">${esc(alertR.gateway_id||'?')}</div></div>
@@ -454,15 +837,15 @@ async function selectAlert(id){
     </div>`;
     const ld=reportR.log_detail;
     if(ld){
-      html+=`<div class="section-title" style="margin-top:8px">📄 日志详情</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">📄 Log Details</div>`;
       html+=`<div class="info-grid">
         <div class="info-card"><div class="info-label">Module</div><div class="info-value">${esc(ld.module||'-')}</div></div>
         <div class="info-card"><div class="info-label">Blocked</div><div class="info-value" style="color:${ld.blocked?'var(--critical)':'var(--neon)'}">${ld.blocked?'BLOCKED':'pass'}</div></div>
         <div class="info-card"><div class="info-label">Risk Score</div><div class="info-value">${ld.risk_score??'-'}</div></div>
         <div class="info-card"><div class="info-label">Agent</div><div class="info-value">${esc(ld.agent_id||'-')}</div></div>
       </div>`;
-      html+=`<div class="info-label" style="margin-top:4px">被检内容 user_input</div>`;
-      html+=`<div class="query-result">${esc(ld.user_input||'(空)')}</div>`;
+      html+=`<div class="info-label" style="margin-top:4px">Inspected content (user_input)</div>`;
+      html+=`<div class="query-result">${esc(ld.user_input||'(empty)')}</div>`;
       if((ld.findings||[]).length){
         html+=`<div class="info-label" style="margin-top:4px">Findings</div>`;
         html+=`<table class="spl-table"><thead><tr><th>rule_hit</th><th>severity</th><th>detector</th><th>matched</th></tr></thead><tbody>`;
@@ -471,23 +854,23 @@ async function selectAlert(id){
       }
     }
     if(reportR.storyline){
-      html+=`<div class="section-title" style="margin-top:8px">📖 叙事</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">📖 Storyline</div>`;
       html+=`<div class="query-result">${esc(reportR.storyline).replace(/\n/g,'<br>')}</div>`;
     }
     if(reportR.mermaid){
-      html+=`<div class="section-title" style="margin-top:8px">🌳 决策树</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">🌳 Decision Tree</div>`;
       html+=`<div class="tree-box"><div class="mermaid" id="mermaidBox"></div></div>`;
     }
     if(reportR.emergence){
-      html+=`<div class="section-title" style="margin-top:8px">🚨 涌现行为检测</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">🚨 Emergent Behavior Detection</div>`;
       html+=`<div class="query-result">${esc(reportR.emergence).replace(/\n/g,'<br>')}</div>`;
     }
     if(reportR.recommendations?.length){
-      html+=`<div class="section-title" style="margin-top:8px">💡 建议</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">💡 Recommendations</div>`;
       reportR.recommendations.forEach((r,i)=>html+=`<div style="font-size:11px;padding:3px 0">${i+1}. ${esc(r)}</div>`);
     }
     if((reportR.dispositions||[]).length){
-      html+=`<div class="section-title" style="margin-top:8px">🛠 处置方案</div>`;
+      html+=`<div class="section-title" style="margin-top:8px">🛠 Disposition Plans</div>`;
       reportR.dispositions.forEach(p=>{
         const isBlock=p.disp_action==='block';
         html+=`<div class="info-card" style="margin-bottom:6px;border-left:3px solid ${isBlock?'var(--critical)':'var(--medium)'}">
@@ -496,9 +879,9 @@ async function selectAlert(id){
             <span style="font-size:11px;color:var(--text-bright)">${esc(p.title)}</span>
           </div>
           <div style="font-size:11px;color:var(--text-dim);margin:3px 0">${esc(p.plan_text)}</div>
-          <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)">动作: ${esc(p.disp_action)} | ${esc(p.command)}</div>
+          <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)">Action: ${esc(p.disp_action)} | ${esc(p.command)}</div>
           <button class="block-btn" style="background:${isBlock?'var(--critical)':'var(--medium)'};margin-top:5px"
-            onclick="executeDisposition('${id}','${esc(p.rule_id)}')">⚡ 执行处置</button>
+            onclick="executeDisposition('${id}','${esc(p.rule_id)}')">⚡ Execute Disposition</button>
         </div>`;
       });
     }
@@ -522,7 +905,66 @@ async function confirmBlock(aid){
       _highlightDispId = r.disposition_id;
       switchPage('disposition');
     }
-  }else alert('阻断失败: '+(r.error||''));
+  }else alert('Block failed: '+(r.error||''));
+}
+
+// ── AI disposition modal for HELD gray-zone alerts ──────────────────────────
+let _disposeRec=null;
+async function openDispose(aid){
+  _disposeRec=null;
+  const ov=document.getElementById('disposeOverlay');
+  document.getElementById('disposeRisk').innerHTML='';
+  document.getElementById('disposeReason').textContent='';
+  document.getElementById('disposeOptions').innerHTML=aiLoading('AI is assessing this alert');
+  ov.style.display='flex';
+  try{
+    const rec=await(await fetch('/api/dispositions/recommend/'+aid)).json();
+    if(rec.error){ document.getElementById('disposeRisk').textContent='Error: '+rec.error; return; }
+    _disposeRec=rec;
+    const sev=rec.risk_score>=70?'🔴':rec.risk_score>=40?'🟡':'🟢';
+    document.getElementById('disposeRisk').innerHTML=
+      `${sev} risk <b>${rec.risk_score}</b> · ${esc(rec.category||'')} `+aiBadge(rec.method);
+    // Label the reasoning as the model's own justification (rule fallback uses the same field).
+    document.getElementById('disposeReason').innerHTML=
+      rec.reasoning?`<b style="color:var(--text)">${rec.method==='llm'?'AI reasoning':'Rule reasoning'}:</b> ${esc(rec.reasoning)}`:'';
+    // Surface the AI-drafted gateway rule (was previously sent silently on apply, never shown).
+    const sr=rec.suggested_rule;
+    let srHtml='';
+    if(sr&&(sr.name||sr.patterns)){
+      const pats=(sr.patterns||[]).map(p=>`<code>${esc(p)}</code>`).join(' ');
+      srHtml=`<div class="ai-rule-card">
+        <div class="lbl">⚡ AI-generated gateway rule</div>
+        <div style="font-size:12px;color:var(--text-bright);margin:2px 0"><b>${esc(sr.name||'(unnamed)')}</b>
+          ${sr.action?`<span class="rule-tag ${sr.action==='block'?'block':''}">${esc(sr.action)}</span>`:''}</div>
+        ${sr.description?`<div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">${esc(sr.description)}</div>`:''}
+        ${pats?`<div class="lbl">patterns</div><div>${pats}</div>`:''}
+        <div style="font-size:9px;color:var(--text-dim);margin-top:4px">Applied when you select “Optimize gateway policy”.</div>
+      </div>`;
+    }
+    document.getElementById('disposeOptions').innerHTML=srHtml+(rec.options||[]).map(o=>`
+      <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer;border-bottom:1px solid var(--border)">
+        <input type="checkbox" class="dispose-opt" value="${o.key}" ${o.recommended?'checked':''} style="margin-top:3px">
+        <span>
+          <b>${esc(o.label)}</b> ${o.recommended?'<span style="font-size:9px;color:var(--neon)">AI ✓</span>':''}
+          ${o.real?'':'<span style="font-size:9px;color:var(--text-dim)">(record-only)</span>'}
+          <br><span style="font-size:11px;color:var(--text-dim)">${esc(o.desc)}</span>
+        </span>
+      </label>`).join('');
+  }catch(e){ document.getElementById('disposeRisk').textContent='Error: '+e.message; }
+}
+function hideDispose(){ document.getElementById('disposeOverlay').style.display='none'; _disposeRec=null; }
+async function submitDispose(acceptRisk){
+  if(!_disposeRec){ hideDispose(); return; }
+  const sels=acceptRisk?[]:Array.from(document.querySelectorAll('.dispose-opt:checked')).map(c=>c.value);
+  try{
+    const r=await(await fetch('/api/dispositions/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({alert_id:_disposeRec.alert_id, selections:sels, accept_risk:acceptRisk,
+        suggested_rule:_disposeRec.suggested_rule})})).json();
+    if(r.success){
+      hideDispose(); loadOverview();
+      if(r.disposition_id){ _highlightDispId=r.disposition_id; switchPage('disposition'); }
+    }else alert('Disposition failed: '+(r.error||''));
+  }catch(e){ alert('Disposition failed: '+e.message); }
 }
 async function executeDisposition(alertId, ruleId){
   try{
@@ -530,10 +972,10 @@ async function executeDisposition(alertId, ruleId){
     if(r.success){
       await loadOverview();
       const dc=document.getElementById('detailContent');
-      if(dc)dc.innerHTML='<div class="empty-hint">✓ 已处置('+esc(r.status||'')+')，见处置记录页</div>';
+      if(dc)dc.innerHTML='<div class="empty-hint">✓ Disposed ('+esc(r.status||'')+') — see the Dispositions page</div>';
       if(r.disposition_id){ _highlightDispId=r.disposition_id; switchPage('disposition'); }
-    }else alert('处置失败: '+(r.error||''));
-  }catch(e){ alert('处置失败: '+e.message); }
+    }else alert('Disposition failed: '+(r.error||''));
+  }catch(e){ alert('Disposition failed: '+e.message); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -549,15 +991,15 @@ async function loadRules(query){
     rules=await(await fetch('/api/rules')).json();
   }
   const c=document.getElementById('rulesList');
-  if(!rules||!rules.length){c.innerHTML='<div class="empty-hint">暂无规则</div>';return}
+  if(!rules||!rules.length){c.innerHTML='<div class="empty-hint">No rules yet</div>';return}
   c.innerHTML=rules.map(r=>`
     <div class="rule-row${r.enabled?'':' disabled'}">
       <div style="flex:1">
         <div class="rule-name">${esc(r.rule_id||'?')} ${esc(r.name||'')}</div>
         <div class="rule-meta">${esc(r.description||'')}</div>
         <div style="font-size:9px;color:var(--text-dim);margin-top:2px">
-          模式: ${(r.patterns||[]).join(', ')}
-          ${r._score?' <span style="color:var(--neon)">相关性:'+r._score+'</span>':''}
+          Patterns: ${(r.patterns||[]).join(', ')}
+          ${r._score?' <span style="color:var(--neon)">Relevance:'+r._score+'</span>':''}
           ${r._match_reasons?' <span style="color:var(--blue)">['+r._match_reasons.join(',')+']</span>':''}
         </div>
       </div>
@@ -575,13 +1017,13 @@ async function addNLRule(){
   const text=document.getElementById('nlRuleInput').value.trim();
   if(!text)return;
   const r=document.getElementById('nlRuleResult');
-  r.textContent='执行中...';
+  r.textContent='Running...';
   try{
     const res=await(await fetch('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:text})})).json();
     if(res.feedback_nl){r.textContent=res.feedback_nl;r.style.color='var(--neon)'}
-    else{r.textContent=res.error||'完成';r.style.color='var(--medium)'}
+    else{r.textContent=res.error||'Done';r.style.color='var(--medium)'}
     loadAllRules();
-  }catch(e){r.textContent='错误: '+e.message;r.style.color='var(--critical)'}
+  }catch(e){r.textContent='Error: '+e.message;r.style.color='var(--critical)'}
 }
 
 // ═══════════════════════════════════════════════════════
@@ -591,16 +1033,16 @@ async function submitNLQuery(){
   const q=document.getElementById('nlQueryInput').value.trim();
   if(!q)return;
   const dc=document.getElementById('queryResults');
-  dc.innerHTML='<div class="empty-hint">处理中...</div>';
+  dc.innerHTML=aiLoading('AI is analyzing your request');
   try{
     const res=await(await fetch('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})})).json();
 
     // Check if confirmation needed (OBSERVE mode action)
     if(res.requires_confirmation && res.action_parsed){
       pendingAction=res.action_parsed;
-      document.getElementById('confirmMsg').textContent=res.feedback_nl||'确认执行此操作?';
+      document.getElementById('confirmMsg').textContent=res.feedback_nl||'Confirm this action?';
       document.getElementById('confirmOverlay').style.display='flex';
-      dc.innerHTML='<div class="empty-hint">⏳ 等待确认...</div>';
+      dc.innerHTML='<div class="empty-hint">⏳ Awaiting confirmation...</div>';
       return;
     }
 
@@ -608,47 +1050,48 @@ async function submitNLQuery(){
 
     // NL rule config result
     if(res.intent==='rule_config'){
-      html=`<div class="section-title" style="font-size:12px">🆕 规则配置结果</div>`;
+      html=`<div class="section-title" style="font-size:12px">🆕 Rule Configuration Result</div>`;
       html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
     }
     // Mode switch
     else if(res.intent==='mode_switch'){
-      html=`<div class="section-title" style="font-size:12px">🔄 模式切换</div>`;
+      html=`<div class="section-title" style="font-size:12px">🔄 Mode Switch</div>`;
       html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
       loadMode();
     }
     // Action result
     else if(res.intent==='action'){
-      html=`<div class="section-title" style="font-size:12px">⚡ 命令执行</div>`;
+      html=`<div class="section-title" style="font-size:12px">⚡ Command Execution</div>`;
       html+=`<div class="query-result">${esc(res.feedback_nl||'')}</div>`;
     }
     // Rules search
     else if(res.intent==='rules_search'){
-      html=`<div class="section-title" style="font-size:12px">📋 规则搜索结果 (${res.total||0})</div>`;
+      html=`<div class="section-title" style="font-size:12px">📋 Rule Search Results (${res.total||0})</div>`;
       if(res.summary)html+=`<div style="font-size:11px;color:var(--neon);margin-bottom:6px">${esc(res.summary)}</div>`;
       (res.rules||[]).forEach(r=>{
         html+=`<div class="info-card" style="font-size:11px">
           <b>${esc(r.rule_id)} ${esc(r.name)}</b> <span class="rule-action ${r.action||''}">${(r.action||'?').toUpperCase()}</span>
           <div style="color:var(--text-dim);font-size:10px">${esc(r.description||'')}</div>
-          <div style="font-size:9px;color:var(--blue)">模式: ${(r.patterns||[]).join(', ')} | 相关性: ${r._score||'N/A'}</div>
+          <div style="font-size:9px;color:var(--blue)">Patterns: ${(r.patterns||[]).join(', ')} | Relevance: ${r._score||'N/A'}</div>
         </div>`;
       });
     }
     // Query result
     else if(res.intent==='query'||res.spl){
-      html=`<div class="section-title" style="font-size:12px">🔍 查询结果</div>`;
+      html=`<div class="section-title" style="font-size:12px">🔍 Query Results ${aiBadge(res.method)}</div>`;
       if(res.summary)html+=`<div style="font-size:11px;color:var(--neon);margin-bottom:6px">${esc(res.summary)}</div>`;
-      if(res.spl)html+=`<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">SPL: ${esc(res.spl)} (${res.method})</div>`;
+      // SPL provenance: the badge shows whether the LLM or the keyword fallback produced this query.
+      if(res.spl)html+=`<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">SPL: ${esc(res.spl)}</div>`;
       if((res.events||[]).length){
         res.events.forEach(e=>html+=`<div class="info-card" style="font-size:11px">
           ${esc(e.event_id)} [${esc(e.event_type)}] ${esc(e.triggered_rule)} — ${Math.round((e.confidence||0)*100)}%</div>`);
       }else{
-        html+=`<div class="query-result" style="color:var(--text-dim)">无匹配事件</div>`;
+        html+=`<div class="query-result" style="color:var(--text-dim)">No matching events</div>`;
       }
     }
     // Fallback
     else{
-      html=`<div class="section-title" style="font-size:12px">📋 结果</div>`;
+      html=`<div class="section-title" style="font-size:12px">📋 Result</div>`;
       html+=`<div class="query-result">${esc(JSON.stringify(res,null,2))}</div>`;
     }
     dc.innerHTML=html;
@@ -658,13 +1101,13 @@ async function submitNLQuery(){
     renderQueryHistory();
     loadStats();
     loadOverview();
-  }catch(e){dc.innerHTML='<div class="query-result error">错误: '+esc(e.message)+'</div>'}
+  }catch(e){dc.innerHTML='<div class="query-result error">Error: '+esc(e.message)+'</div>'}
 }
 function renderQueryHistory(){
   const c=document.getElementById('queryHistory');
   if(!queryHistory.length){c.style.display='none';return}
   c.style.display='block';
-  let html='<div class="section-title" style="font-size:10px">📜 历史</div>';
+  let html='<div class="section-title" style="font-size:10px">📜 History</div>';
   queryHistory.slice(0,15).forEach((h,i)=>html+=`<div class="query-history-item" onclick="document.getElementById('nlQueryInput').value='${esc(h.query)}';submitNLQuery()">
     <div class="q">${esc(h.query)}</div><div class="r">${esc(h.summary||'')}</div></div>`);
   c.innerHTML=html;
@@ -675,9 +1118,9 @@ async function executeConfirmedAction(){
   try{
     const res=await(await fetch('/api/action/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:pendingAction})})).json();
     const dc=document.getElementById('queryResults');
-    dc.innerHTML=`<div class="section-title" style="font-size:12px">⚡ 命令执行结果</div>
+    dc.innerHTML=`<div class="section-title" style="font-size:12px">⚡ Command Execution Result</div>
       <div class="query-result">${esc(res.feedback_nl||JSON.stringify(res))}</div>`;
-    queryHistory.unshift({query:'[确认执行] '+pendingAction.target||'action',intent:'action_confirmed',summary:res.feedback_nl||'ok'});
+    queryHistory.unshift({query:'[Confirmed] '+pendingAction.target||'action',intent:'action_confirmed',summary:res.feedback_nl||'ok'});
     renderQueryHistory();
     loadStats();loadOverview();
   }catch(e){}
@@ -697,29 +1140,30 @@ async function loadDispositions(){
   c.innerHTML='<div class="empty-hint">LOADING...</div>';
   try{
     const disps=await(await fetch('/api/dispositions')).json();
-    document.getElementById('dispCount').textContent='('+(disps.length||0)+'条)';
-    if(!disps||!disps.length){c.innerHTML='<div class="empty-hint">暂无处置记录</div>';return}
+    document.getElementById('dispCount').textContent='('+(disps.length||0)+')';
+    if(!disps||!disps.length){c.innerHTML='<div class="empty-hint">No disposition records yet</div>';return}
     c.innerHTML=disps.map(d=>`
       <div class="info-card disp-item ${d.disposition_id===_highlightDispId?'highlight':''}" id="disp-${d.disposition_id}" style="margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <span style="font-family:var(--font-mono);font-size:11px;color:var(--neon)">${esc(d.disposition_id)}</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--neon)">${esc(d.disposition_id)}
+            ${d.operator==='auto'?`<span class="ai-badge llm" title="Handled automatically by the AI in AUTO mode">🤖 AI AUTO-HANDLED</span>`:`<span class="ai-badge rule" title="Handled by a human operator">👤 MANUAL</span>`}</span>
           <span style="font-size:10px;color:var(--text-dim)">${esc((d.created_at||'').substring(0,19))}</span>
         </div>
         <div class="info-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
-          <div><div class="info-label">处置模式</div><div class="info-value" style="font-size:11px;color:${d.mode==='auto'?'var(--blue)':'var(--medium)'}">${d.mode==='auto'?'🤖 AUTO':'👤 OBSERVE'}</div></div>
-          <div><div class="info-label">操作人</div><div class="info-value" style="font-size:11px">${esc(d.operator||'-')}</div></div>
-          <div><div class="info-label">动作</div><div class="info-value" style="font-size:11px;color:${d.action==='block'?'var(--critical)':'var(--text)'}">${esc(d.action)}</div></div>
-          <div><div class="info-label">结果</div><div class="info-value" style="font-size:11px;color:${(d.result==='success'||d.result==='blocked')?'var(--neon)':d.result==='failed'?'var(--critical)':'var(--medium)'}">${esc(d.result)}</div></div>
+          <div><div class="info-label">Mode</div><div class="info-value" style="font-size:11px;color:${d.mode==='auto'?'var(--blue)':'var(--medium)'}">${d.mode==='auto'?'🤖 AUTO':'👤 OBSERVE'}</div></div>
+          <div><div class="info-label">Operator</div><div class="info-value" style="font-size:11px">${esc(d.operator||'-')}</div></div>
+          <div><div class="info-label">Action</div><div class="info-value" style="font-size:11px;color:${d.action==='block'?'var(--critical)':'var(--text)'}">${esc(d.action)}</div></div>
+          <div><div class="info-label">Result</div><div class="info-value" style="font-size:11px;color:${(d.result==='success'||d.result==='blocked')?'var(--neon)':d.result==='failed'?'var(--critical)':'var(--medium)'}">${esc(d.result)}</div></div>
         </div>
-        <div class="info-label" style="margin-top:5px">告警原文</div>
-        <div style="margin-top:2px;padding:6px;background:var(--bg-deep);border-radius:4px;font-size:11px;color:var(--text);word-break:break-all">${esc(d.alert_text||'(无)')}</div>
-        <div class="info-label" style="margin-top:5px">处置命令</div>
+        <div class="info-label" style="margin-top:5px">Alert Text</div>
+        <div style="margin-top:2px;padding:6px;background:var(--bg-deep);border-radius:4px;font-size:11px;color:var(--text);word-break:break-all">${esc(d.alert_text||'(none)')}</div>
+        <div class="info-label" style="margin-top:5px">Disposition Command</div>
         <div style="margin-top:2px;padding:6px;background:var(--bg-deep);border-radius:4px;font-size:10px;font-family:var(--font-mono);color:var(--text-dim);word-break:break-all">
           ${esc(d.command)}
         </div>
         <div style="margin-top:4px;font-size:10px;color:var(--text-dim)">
-          ${esc(d.detail)} ${d.triggered_rule?' | 规则: '+esc(d.triggered_rule):''} ${d.risk_level?' | 风险: '+esc(d.risk_level):''}
-          ${d.acknowledged_at?' | 确认时间: '+esc(d.acknowledged_at.substring(0,19)):''}
+          ${esc(d.detail)} ${d.triggered_rule?' | Rule: '+esc(d.triggered_rule):''} ${d.risk_level?' | Risk: '+esc(d.risk_level):''}
+          ${d.acknowledged_at?' | Acknowledged at: '+esc(d.acknowledged_at.substring(0,19)):''}
         </div>
       </div>`).join('');
     // Scroll to highlighted disposition
@@ -763,7 +1207,7 @@ async function splunkSearch(){
 
   empty.style.display='none';
   table.style.display='table';
-  tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px">查询中...</td></tr>';
+  tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px">Searching...</td></tr>';
   detail.style.display='none';
 
   try{
@@ -777,7 +1221,7 @@ async function splunkSearch(){
     _splEvents=events;
 
     if(!events.length){
-      tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px">无匹配结果</td></tr>';
+      tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px">No matching results</td></tr>';
       return;
     }
 
@@ -792,7 +1236,7 @@ async function splunkSearch(){
         <td><span class="lnk" onclick="event.stopPropagation();showSplRaw(${i})">JSON</span></td>
       </tr>`).join('');
   }catch(e){
-    tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--critical);padding:20px">查询错误: '+esc(e.message)+'</td></tr>';
+    tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--critical);padding:20px">Search error: '+esc(e.message)+'</td></tr>';
   }
 }
 
@@ -807,15 +1251,53 @@ function showSplRaw(i){
 
 // ── Mode ──────────────────────────────────────────────
 async function setMode(mode){
+  // Switching INTO auto hands ALL disposition to the AI — confirm with the operator first.
+  if(mode==='auto' && currentMode!=='auto'){
+    const n=(alerts||[]).filter(a=>!a.handled && (a.held||a.pending_block)).length;
+    showAutoConfirm(n);
+    return;  // wait for explicit confirmation
+  }
+  await applyMode(mode);
+}
+
+async function applyMode(mode){
   await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
   currentMode=mode;
   document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===currentMode));
+  renderAlerts();  // instantly reflect the mode (hide manual buttons under AUTO)
+  if(mode==='auto'){
+    // AUTO takeover: the AI auto-disposes the current pending/held backlog in the
+    // background. Poll a few times so handled alerts move into the disposition
+    // records (each shown as "🤖 AI AUTO-HANDLED").
+    [600,1800,3500,6000,9000].forEach(t=>setTimeout(()=>{loadStats();loadOverview();loadDispositions();},t));
+  }else{
+    loadStats();loadOverview();
+  }
 }
+
+// AUTO takeover confirmation modal
+function showAutoConfirm(pendingCount){
+  const n=pendingCount||0;
+  document.getElementById('autoConfirmMsg').innerHTML=
+    `Switch to <b style="color:var(--neon)">AUTO</b> mode and let the AI take over disposition?<br><br>`+
+    `• The <b style="color:var(--medium)">${n}</b> alert(s) currently awaiting a human will be `+
+    `<b>auto-handled immediately</b> by the AI.<br>`+
+    `• Every new gray-zone / held alert will be auto-disposed <b>without manual confirmation</b>.<br>`+
+    `• Every action is logged in <b>📜 Disposition Records</b> as “🤖 AI AUTO-HANDLED”.<br><br>`+
+    `You can switch back to OBSERVE at any time to resume manual control.`;
+  document.getElementById('autoConfirmOverlay').style.display='flex';
+}
+function hideAutoConfirm(){
+  document.getElementById('autoConfirmOverlay').style.display='none';
+  // Cancelled → keep the mode buttons reflecting the unchanged current mode.
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===currentMode));
+}
+function confirmAutoTakeover(){ hideAutoConfirm(); applyMode('auto'); }
 
 // ── Utils ─────────────────────────────────────────────
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
-// 把网关写入的 UTC 时间戳按浏览器本地时区显示；解析失败则回退原串截取（如已是本地的 _time）。
-// mode='time' 只显示时分秒，'full' 显示完整日期时间。
+// Display the UTC timestamp written by the gateway in the browser's local timezone; on parse failure fall back to substring of the raw string (e.g. when _time is already local).
+// mode='time' shows only the time of day; 'full' shows the full date and time.
 function tzLocal(s, mode){
   if(!s) return '';
   const d = new Date(s);
@@ -828,6 +1310,9 @@ async function refresh(){
   await Promise.all([loadStats(),loadMode(),loadOverview()]);
   setTimeout(refresh,5000);
 }
+// Load the active LLM provider once so inline AI badges show the real name (e.g. DeepSeek).
+paintAiBadges();
+fetch('/api/ai/status').then(r=>r.json()).then(s=>{if(s&&s.provider)_aiProvider=s.provider;paintAiBadges();}).catch(()=>{});
 refresh();
 </script>
 </body>

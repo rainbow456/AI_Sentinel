@@ -32,7 +32,7 @@ NODE_STYLE_ERROR = "fill:#2a2a0a,stroke:#ffcc00,stroke-width:3px,color:#ffcc00"
 NODE_STYLE_ROOT = "fill:#0a1a2a,stroke:#00ccff,stroke-width:2px,color:#c0e8ff"
 NODE_STYLE_BLOCKED = "fill:#2a0a2a,stroke:#ff00ff,stroke-width:3px,color:#ff88ff"
 
-SEVERITY_LABELS = {"high": "高危", "medium": "中危", "low": "低危", "critical": "严重"}
+SEVERITY_LABELS = {"high": "High", "medium": "Medium", "low": "Low", "critical": "Critical"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,8 +66,8 @@ class SingleEventReport:
             "rule_analysis": self._rule_analysis(),
             "risk_assessment": self._risk_assessment(),
             "recommendations": self._recommendations(),
-            "log_detail": self._log_detail(),        # 原始日志详情（需求1）
-            "dispositions": self._dispositions(),     # 逐规则可执行处置方案（需求2）
+            "log_detail": self._log_detail(),        # Raw log detail (requirement 1)
+            "dispositions": self._dispositions(),     # Per-rule actionable disposition plans (requirement 2)
             "has_spans": len(self.event.raw_spans) > 0,
         }
 
@@ -88,18 +88,18 @@ class SingleEventReport:
 
     def _event_summary(self) -> str:
         e = self.event
-        type_cn = {"blocked": "已阻断", "passed": "已放行", "action_confirmation": "行动确认(共谋信号)"}
+        type_cn = {"blocked": "Blocked", "passed": "Passed", "action_confirmation": "Action confirmation (collusion signal)"}
         return (
-            f"事件 {e.event_id} 由 Gateway [{e.gateway_id}] 上报，"
-            f"类型为 {type_cn.get(e.event_type, e.event_type)}，"
-            f"触发规则 {e.triggered_rule}（置信度 {e.confidence:.0%}）。"
-            f"LLM提供商: {e.llm_provider}。"
+            f"Event {e.event_id} reported by Gateway [{e.gateway_id}], "
+            f"type {type_cn.get(e.event_type, e.event_type)}, "
+            f"triggered rule {e.triggered_rule} (confidence {e.confidence:.0%}). "
+            f"LLM provider: {e.llm_provider}."
         )
 
     def _rule_analysis(self) -> dict:
         matches = self.alert.rule_matches
         if not matches:
-            return {"matched": False, "message": "未匹配任何安全规则"}
+            return {"matched": False, "message": "No security rules matched"}
         return {
             "matched": True,
             "count": len(matches),
@@ -120,13 +120,13 @@ class SingleEventReport:
 
     def _risk_assessment(self) -> dict:
         if self.event.is_blocked:
-            risk = "🔴 高危" if self.event.confidence > 0.8 else "🟠 中危"
+            risk = "🔴 High" if self.event.confidence > 0.8 else "🟠 Medium"
         elif self.event.event_type == "action_confirmation":
-            risk = "🔴 严重 — 共谋信号"
+            risk = "🔴 Critical — collusion signal"
         elif self.event.confidence < 0.3:
-            risk = "🟢 低危"
+            risk = "🟢 Low"
         else:
-            risk = "🟡 需关注"
+            risk = "🟡 Needs attention"
 
         blocked = self.alert.blocked
         pending = self.alert.pending_block
@@ -135,27 +135,27 @@ class SingleEventReport:
             "level": risk,
             "blocked": blocked,
             "pending_block": pending,
-            "status": "已自动阻断" if blocked else ("待确认阻断" if pending else "已记录"),
+            "status": "Auto-blocked" if blocked else ("Block pending confirmation" if pending else "Logged"),
         }
 
     def _recommendations(self) -> list[str]:
         recs = []
         e = self.event
         if e.event_type == "blocked":
-            recs.append("检查 Gateway 阻断日志，确认阻断原因")
+            recs.append("Review the Gateway block log to confirm the block reason")
         if e.event_type == "action_confirmation":
-            recs.append("⚠ 立即审查涉及的 Agent 间通信记录，排查是否存在共谋行为")
-            recs.append("检查 Agent 间 action_confirmation 的发起方和接收方是否符合预设流程")
+            recs.append("⚠ Immediately review inter-agent communication records and investigate possible collusion")
+            recs.append("Verify that the sender and receiver of inter-agent action_confirmation match the expected flow")
         if e.confidence > 0.8:
-            recs.append("高置信度告警 — 建议将此 IP/用户加入观察名单")
+            recs.append("High-confidence alert — recommend adding this IP/user to the watchlist")
         if self.event.raw_spans:
-            recs.append("该事件包含多Agent Span数据 — 建议审查完整决策树")
+            recs.append("This event contains multi-agent span data — recommend reviewing the full decision tree")
         if not recs:
-            recs.append("记录事件并持续监控")
+            recs.append("Log the event and continue monitoring")
         return recs
 
     def _log_detail(self) -> dict:
-        """原始日志详情（需求1）：被检内容全文 + 逐条 finding。"""
+        """Raw log detail (requirement 1): full inspected content + each finding."""
         e = self.event
         findings = []
         for f in (e.findings or []):
@@ -193,9 +193,10 @@ class SingleEventReport:
         }
 
     def _dispositions(self) -> list[dict]:
-        """逐条匹配规则的可执行处置方案（需求2）。
-        网关已在源头阻断的事件不出处置方案——analyst 仅做告警预览，
-        dashboard 的「执行处置」按钮随之消失。"""
+        """Actionable disposition plans per matched rule (requirement 2).
+        Events already blocked at the gateway source produce no disposition plans —
+        the analyst only previews the alert, so the dashboard's "Execute Disposition"
+        button disappears accordingly."""
         if getattr(self.alert.event, "blocked", False):
             return []
         from .disposition_planner import plans_for_alert
@@ -321,15 +322,15 @@ class BatchAlertReport:
         total = len(self.alerts)
 
         if blocked > total * 0.5:
-            recs.append(f"⚠ 阻断率高达 {blocked}/{total}，建议审查Gateway规则阈值是否过严")
+            recs.append(f"⚠ Block rate is as high as {blocked}/{total}; review whether Gateway rule thresholds are too strict")
         if collusion > 0:
-            recs.append(f"🚨 检测到 {collusion} 个共谋信号，强烈建议审计Agent间通信")
+            recs.append(f"🚨 Detected {collusion} collusion signals; strongly recommend auditing inter-agent communication")
         if self.anomalies:
-            recs.append(f"发现 {len(self.anomalies)} 个决策树级异常，建议人工复核")
+            recs.append(f"Found {len(self.anomalies)} decision-tree-level anomalies; recommend manual review")
         if total > 20:
-            recs.append("告警量较大，建议启用 AUTO 模式减轻人工负担")
+            recs.append("High alert volume; recommend enabling AUTO mode to reduce manual workload")
         if not recs:
-            recs.append("系统运行正常，继续保持监控")
+            recs.append("System operating normally; continue monitoring")
         return recs
 
 
@@ -395,7 +396,7 @@ class ReportA:
                 cnid = self._safe_id(node.span.span_id)
                 parent_node = self.tree.node_map.get(node.span.parent_span_id)
                 is_cross = parent_node and parent_node.span.agent_id != node.span.agent_id
-                edge = " -.->|跨Agent| " if is_cross else " --> "
+                edge = " -.->|cross-agent| " if is_cross else " --> "
                 lines.append(f"  {pnid}{edge}{cnid}")
 
         for node in self.tree.walk_all():
@@ -413,18 +414,18 @@ class ReportA:
         if node.span.span_id in self._anomaly_map:
             types = {a.anomaly_type for a in self._anomaly_map[node.span.span_id]}
             if AnomalyType.UNAUTHORIZED_COMMUNICATION in types:
-                label += "\\n📵非授权"
+                label += "\\n📵Unauthorized"
             if AnomalyType.REASONING_ERROR in types:
-                label += "\\n❌推理错误"
+                label += "\\n❌Reasoning error"
             if AnomalyType.RULE_BYPASS in types:
-                label += "\\n⚠绕过规则"
+                label += "\\n⚠Rule bypass"
             if AnomalyType.COLLUSION in types:
-                label += "\\n🚨共谋"
+                label += "\\n🚨Collusion"
             if AnomalyType.EXCESSIVE_NEGOTIATION in types:
-                label += "\\n🔄过度协商"
+                label += "\\n🔄Excessive negotiation"
 
         if node.span.is_error and node.span.span_id not in self._anomaly_map:
-            label += "\\n⚠错误"
+            label += "\\n⚠Error"
 
         if len(label) > 80:
             label = label[:77] + "..."
@@ -449,16 +450,16 @@ class ReportA:
                 continue
             span = node.span
             what = self._describe_action(node)
-            why = span.thought[:200] if span.thought else "（无显式推理记录）"
+            why = span.thought[:200] if span.thought else "(no explicit reasoning recorded)"
             ctx_parts = []
             if span.context_snapshot:
                 mems = span.context_snapshot.get("memory_refs", [])
                 if mems:
-                    ctx_parts.append(f"记忆引用: {', '.join(mems[:5])}")
+                    ctx_parts.append(f"Memory refs: {', '.join(mems[:5])}")
                 policy = span.context_snapshot.get("policy_ref", "")
                 if policy:
-                    ctx_parts.append(f"策略参考: {policy}")
-            context = "; ".join(ctx_parts) if ctx_parts else "（无上下文快照）"
+                    ctx_parts.append(f"Policy ref: {policy}")
+            context = "; ".join(ctx_parts) if ctx_parts else "(no context snapshot)"
             outcome = self._describe_outcome(node)
             anomaly_note = ""
             if span.span_id in self._anomaly_map:
@@ -484,33 +485,33 @@ class ReportA:
         span = node.span
         agent = self._agent_display_name(span.agent_id)
         if node.node_type == NodeType.DELEGATION:
-            return f"{agent} 将任务委托给 {self._agent_display_name(span.message_to or '?')}: {span.thought[:60]}..."
+            return f"{agent} delegated the task to {self._agent_display_name(span.message_to or '?')}: {span.thought[:60]}..."
         elif node.node_type == NodeType.MESSAGE:
             target = self._agent_display_name(span.message_to or "?")
             if not span.is_registered_action:
-                return f"{agent} 通过非标准渠道({span.action})向 {target} 发送私下消息"
-            return f"{agent} 向 {target} 发送通知消息"
+                return f"{agent} sent a private message to {target} via a non-standard channel ({span.action})"
+            return f"{agent} sent a notification message to {target}"
         elif node.node_type == NodeType.TOOL_CALL:
             tn = span.tool_call.get("name", "?") if span.tool_call else "?"
-            return f"{agent} 调用工具 '{tn}'"
+            return f"{agent} called tool '{tn}'"
         elif node.node_type == NodeType.ERROR:
-            return f"{agent} 出现错误: {span.metadata.get('error_detail', '未知')}"
+            return f"{agent} encountered an error: {span.metadata.get('error_detail', 'unknown')}"
         elif node.is_root:
-            return f"{agent} 发起此次多Agent协作"
-        return f"{agent} 执行 {span.action}"
+            return f"{agent} initiated this multi-agent collaboration"
+        return f"{agent} executed {span.action}"
 
     def _describe_outcome(self, node: CausalNode) -> str:
         span = node.span
         if span.tool_call:
             r = span.tool_call.get("result", "")
             if isinstance(r, dict):
-                return f"工具调用结果: {r.get('status', str(r))}"
-            return f"工具返回: {str(r)[:80]}"
+                return f"Tool call result: {r.get('status', str(r))}"
+            return f"Tool returned: {str(r)[:80]}"
         if span.message_to:
-            return f"消息发送至 {self._agent_display_name(span.message_to)}"
+            return f"Message sent to {self._agent_display_name(span.message_to)}"
         if node.children:
-            return f"进入下一步: {node.children[0].span.action}"
-        return "终端节点"
+            return f"Proceeded to next step: {node.children[0].span.action}"
+        return "Terminal node"
 
     @staticmethod
     def _safe_id(raw: str) -> str:
@@ -518,8 +519,8 @@ class ReportA:
 
     @staticmethod
     def _agent_display_name(aid: str) -> str:
-        m = {"customer_service": "客服Agent", "tech_support": "技术支持Agent",
-             "refund": "退款Agent"}
+        m = {"customer_service": "Customer Service Agent", "tech_support": "Tech Support Agent",
+             "refund": "Refund Agent"}
         return m.get(aid, aid)
 
     def to_dict(self) -> dict:
@@ -544,37 +545,37 @@ class ReportB:
 
     def summary(self) -> str:
         if not self.anomalies:
-            return "✅ 未检测到涌现行为异常。"
-        lines = [f"⚠️ 检测到 {len(self.anomalies)} 个涌现行为异常，"
-                 f"涉及 {len(self._affected_agents())} 个Agent。"]
+            return "✅ No emergent behavior anomalies detected."
+        lines = [f"⚠️ Detected {len(self.anomalies)} emergent behavior anomalies, "
+                 f"involving {len(self._affected_agents())} agents."]
         by_sev = self.by_severity()
-        for sev, label in [("high", "🔴 高危"), ("medium", "🟡 中危"), ("low", "🟢 低危")]:
+        for sev, label in [("high", "🔴 High"), ("medium", "🟡 Medium"), ("low", "🟢 Low")]:
             if by_sev.get(sev):
-                lines.append(f"\n{label} ({len(by_sev[sev])} 个):")
+                lines.append(f"\n{label} ({len(by_sev[sev])}):")
                 for i, a in enumerate(by_sev[sev], 1):
                     lines.append(f"  {i}. [{a.anomaly_type.value}] {a.description}")
         type_counts = defaultdict(int)
         for a in self.anomalies:
             type_counts[a.anomaly_type.value] += 1
-        lines.append("\n📊 异常类型分布:")
+        lines.append("\n📊 Anomaly type distribution:")
         type_names = {
-            "unauthorized_communication": "非授权通信",
-            "excessive_negotiation": "过度协商",
-            "rule_bypass": "规则绕过",
-            "reasoning_error": "推理错误",
-            "collusion": "Agent共谋",
+            "unauthorized_communication": "Unauthorized communication",
+            "excessive_negotiation": "Excessive negotiation",
+            "rule_bypass": "Rule bypass",
+            "reasoning_error": "Reasoning error",
+            "collusion": "Agent collusion",
         }
         for at, cnt in sorted(type_counts.items(), key=lambda x: -x[1]):
-            lines.append(f"  • {type_names.get(at, at)}: {cnt} 次")
-        lines.append("\n💡 建议:")
+            lines.append(f"  • {type_names.get(at, at)}: {cnt}")
+        lines.append("\n💡 Recommendations:")
         if any(a.anomaly_type == AnomalyType.COLLUSION for a in self.anomalies):
-            lines.append("  • 🚨 立即审查Agent间通信，暂停涉事Agent权限")
+            lines.append("  • 🚨 Immediately review inter-agent communication and suspend the involved agents' permissions")
         if any(a.anomaly_type == AnomalyType.UNAUTHORIZED_COMMUNICATION for a in self.anomalies):
-            lines.append("  • 审查Agent通信接口，注册所有合法action")
+            lines.append("  • Review agent communication interfaces and register all legitimate actions")
         if any(a.anomaly_type == AnomalyType.RULE_BYPASS for a in self.anomalies):
-            lines.append("  • 加强任务委托审批校验")
+            lines.append("  • Strengthen task-delegation approval checks")
         if any(a.anomaly_type == AnomalyType.REASONING_ERROR for a in self.anomalies):
-            lines.append("  • 为关键操作添加双重确认机制")
+            lines.append("  • Add a dual-confirmation mechanism for critical operations")
         return "\n".join(lines)
 
     def by_severity(self) -> dict:

@@ -11,7 +11,7 @@
 **Remote sync note:** Remote commit `582ed84` (2026-06-13 17:48) already made some improvements that overlap with this plan:
 - `splunk_mcp.py`: `_build_spl_search` now separates time params from SPL, `_execute_real_search` uses `jobs.oneshot` instead of `create`+polling — these changes are PRESERVED and our new tools build on top of them.
 - `app.py`: `/api/splunk/search`, `/api/splunk/health`, `/api/splunk/indexes` already exist — our plan adds `/api/events/recent` and `/api/gateway/health` alongside them.
-- `dashboard.html`: Remote added a "Splunk 日志" page — our dashboard rewrite incorporates and extends it with event stream, alerts, dispositions, and gateway log panels.
+- `dashboard.html`: Remote added a "Splunk Log" page — our dashboard rewrite incorporates and extends it with event stream, alerts, dispositions, and gateway log panels.
 - `rules.yaml`: 6 rules (R001-R006) added — preserved as-is.
 - `.env`: Splunk config file added — referenced by start scripts.
 
@@ -636,7 +636,7 @@ Replace the entire `_load_events_from_csv` method:
             return
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
-        print(f"{_ts()} 🔄 开始轮询 Splunk (间隔={self._poll_interval}s)")
+        print(f"{_ts()} 🔄 Start polling Splunk (interval={self._poll_interval}s)")
 
     def _poll_loop(self):
         """Background loop: poll Splunk for new events every N seconds."""
@@ -652,10 +652,10 @@ Replace the entire `_load_events_from_csv` method:
                         with self._lock:
                             self._processed_event_ids.add(event.event_id)
                     if fresh:
-                        print(f"{_ts()} 📥 轮询获得 {len(fresh)} 个新事件 "
-                              f"(总计 {len(self._processed_event_ids)})")
+                        print(f"{_ts()} 📥 Poll fetched {len(fresh)} new events "
+                              f"(total {len(self._processed_event_ids)})")
             except Exception as e:
-                print(f"{_ts()} {YELLOW}⚠ 轮询错误: {e}{RESET}")
+                print(f"{_ts()} {YELLOW}⚠ Poll error: {e}{RESET}")
             for _ in range(self._poll_interval):
                 if not self._running:
                     break
@@ -706,11 +706,11 @@ After `_record_disposition`:
                 "risk_level": d.risk_level,
             }, fallback=None)
             if result and result.get("success"):
-                print(f"{_ts()} 📤 处置已写入 Splunk: {d.disposition_id}")
+                print(f"{_ts()} 📤 Disposition written to Splunk: {d.disposition_id}")
                 return True
             return False
         except Exception as e:
-            print(f"{_ts()} {YELLOW}⚠ Splunk HEC 写入失败: {e}{RESET}")
+            print(f"{_ts()} {YELLOW}⚠ Splunk HEC write failed: {e}{RESET}")
             return False
 ```
 
@@ -885,12 +885,12 @@ git commit -m "feat: remove demo endpoints, add events/recent + gateway/health"
 **Files:**
 - Modify: `analyst/ui/templates/dashboard.html`
 
-**Context:** Remote commit `582ed84` added a "Splunk 日志" page with SPL search, presets, results table, and raw JSON viewer. We incorporate this page into our new multi-page dashboard alongside the live event stream, alerts, dispositions, and gateway log panels.
+**Context:** Remote commit `582ed84` added a "Splunk Log" page with SPL search, presets, results table, and raw JSON viewer. We incorporate this page into our new multi-page dashboard alongside the live event stream, alerts, dispositions, and gateway log panels.
 
 The new dashboard has these pages (sidebar navigation):
-1. **仪表盘 (Dashboard)** — Stats row + event stream table + alert cards + mode toggle
-2. **处置记录 (Dispositions)** — Disposition history table
-3. **Splunk 日志 (Splunk Log)** — SPL query bar + presets + results table + raw detail (from remote, integrated)
+1. **Dashboard** — Stats row + event stream table + alert cards + mode toggle
+2. **Dispositions** — Disposition history table
+3. **Splunk Log** — SPL query bar + presets + results table + raw detail (from remote, integrated)
 
 - [ ] **Step 1: Write the complete multi-page dashboard**
 

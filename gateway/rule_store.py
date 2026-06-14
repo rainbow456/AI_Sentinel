@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-规则库 / Rule Store
-==================
-把检测规则从硬编码抽成「数据」：SQLite 单文件存储，标准 schema，支持查询、增改、
-启停、版本历史、回滚。外部安全分析 agent 通过 /rules API 读写这里。
+Rule Store
+==========
+Extracts detection rules from hardcoded form into "data": single-file SQLite
+storage with a standard schema, supporting query, create/update, enable/disable,
+version history, and rollback. External security-analysis agents read and write
+here through the /rules API.
 
-标准规则字段见 RULE_FIELDS；写操作都会做校验（regex 可编译 + 基础 ReDoS 防护）
-并自带版本号自增与历史留痕。
+See RULE_FIELDS for the standard rule fields; write operations are validated
+(regex must compile + basic ReDoS protection) and carry automatic version
+increment and history tracking.
 """
 
 import os
@@ -18,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.db")
 
-# 单条规则的标准字段（API 契约）
+# Standard fields of a single rule (API contract)
 RULE_FIELDS = (
     "id", "category", "name", "owasp_ast", "severity_score", "engine",
     "patterns", "flags", "params", "enabled", "tags", "description_zh", "test_cases",
@@ -29,7 +32,7 @@ _LIST_JSON = ("patterns", "flags", "tags")
 _DICT_JSON = ("test_cases", "params")
 _JSON_COLS = _LIST_JSON + _DICT_JSON
 _MAX_PATTERN_LEN = 2000
-# 嵌套量词的灾难性回溯启发式，如 (a+)+ / (.*)*，命中则拒绝
+# Heuristic for catastrophic backtracking from nested quantifiers, e.g. (a+)+ / (.*)*; reject on match
 _REDOS = re.compile(r"\([^)]*[+*][^)]*\)[+*]")
 
 
@@ -38,7 +41,7 @@ def _now() -> str:
 
 
 class RuleError(ValueError):
-    """规则校验失败。"""
+    """Rule validation failed."""
 
 
 class RuleStore:
@@ -66,13 +69,13 @@ class RuleStore:
             );
             """
         )
-        # 兼容旧库：缺 params 列则补上
+        # Backward compat with old DBs: add the params column if missing
         cols = [r["name"] for r in self.conn.execute("PRAGMA table_info(rules)")]
         if "params" not in cols:
             self.conn.execute("ALTER TABLE rules ADD COLUMN params TEXT")
         self.conn.commit()
 
-    # ---- 序列化 ----
+    # ---- serialization ----
     @staticmethod
     def _row_to_rule(row: sqlite3.Row) -> Dict[str, Any]:
         r = dict(row)
@@ -83,37 +86,37 @@ class RuleStore:
         r["enabled"] = bool(r["enabled"])
         return r
 
-    # ---- 校验 ----
+    # ---- validation ----
     def validate(self, rule: Dict[str, Any]) -> None:
         if not rule.get("id"):
-            raise RuleError("缺少 id")
+            raise RuleError("missing id")
         if not rule.get("name"):
-            raise RuleError("缺少 name")
+            raise RuleError("missing name")
         engine = rule.get("engine", "regex")
         if engine not in ("regex", "sensitive", "keyword", "entropy", "ast", "model"):
-            raise RuleError(f"未知 engine: {engine}")
+            raise RuleError(f"unknown engine: {engine}")
         score = rule.get("severity_score", 0)
         if not isinstance(score, int) or not (0 <= score <= 100):
-            raise RuleError("severity_score 必须是 0-100 的整数")
+            raise RuleError("severity_score must be an integer in 0-100")
         if engine in ("regex", "sensitive"):
             pats = rule.get("patterns") or []
             if not pats:
-                raise RuleError(f"{engine} 规则缺少 patterns")
+                raise RuleError(f"{engine} rule is missing patterns")
             for p in pats:
                 if len(p) > _MAX_PATTERN_LEN:
-                    raise RuleError(f"正则过长（>{_MAX_PATTERN_LEN}）")
+                    raise RuleError(f"pattern too long (>{_MAX_PATTERN_LEN})")
                 if _REDOS.search(p):
-                    raise RuleError(f"疑似灾难性回溯（ReDoS）正则被拒绝：{p[:60]}")
+                    raise RuleError(f"pattern rejected as likely catastrophic backtracking (ReDoS): {p[:60]}")
                 try:
                     re.compile(p)
                 except re.error as e:
-                    raise RuleError(f"正则无法编译：{p[:60]} -> {e}")
+                    raise RuleError(f"pattern failed to compile: {p[:60]} -> {e}")
         elif engine == "keyword":
             if not (rule.get("params") or {}).get("keywords"):
-                raise RuleError("keyword 引擎缺少 params.keywords")
+                raise RuleError("keyword engine is missing params.keywords")
 
     def run_tests(self, rule: Dict[str, Any]) -> Dict[str, Any]:
-        """按规则自带 test_cases 试跑；返回 {ok, fails}。"""
+        """Run the rule's own test_cases; returns {ok, fails}."""
         tc = rule.get("test_cases") or {}
         if rule.get("engine", "regex") != "regex" or not tc:
             return {"ok": True, "fails": []}
@@ -127,7 +130,7 @@ class RuleStore:
                 fails.append({"expect": "no_match", "sample": s})
         return {"ok": not fails, "fails": fails}
 
-    # ---- 查询 ----
+    # ---- query ----
     def list(self, category=None, enabled=None, tag=None, q=None) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM rules WHERE 1=1"
         args: List[Any] = []
@@ -148,7 +151,7 @@ class RuleStore:
         row = self.conn.execute("SELECT * FROM rules WHERE id=?", (rid,)).fetchone()
         return self._row_to_rule(row) if row else None
 
-    # ---- 写入（带校验、版本、历史） ----
+    # ---- write (with validation, versioning, history) ----
     def upsert(self, rule: Dict[str, Any], actor: str = "system",
                require_tests: bool = True) -> Dict[str, Any]:
         rule = dict(rule)
@@ -158,7 +161,7 @@ class RuleStore:
         if require_tests:
             res = self.run_tests(rule)
             if not res["ok"]:
-                raise RuleError(f"未通过自带测试用例：{res['fails']}")
+                raise RuleError(f"failed the rule's own test cases: {res['fails']}")
 
         old = self.get(rule["id"])
         version = (old["version"] + 1) if old else 1
@@ -193,7 +196,7 @@ class RuleStore:
     def set_enabled(self, rid: str, enabled: bool, actor: str = "system") -> Dict[str, Any]:
         cur = self.get(rid)
         if not cur:
-            raise RuleError(f"规则不存在：{rid}")
+            raise RuleError(f"rule does not exist: {rid}")
         version = cur["version"] + 1
         self.conn.execute(
             "UPDATE rules SET enabled=?, version=?, updated_by=?, updated_at=? WHERE id=?",
@@ -224,7 +227,7 @@ class RuleStore:
             "SELECT snapshot FROM rule_history WHERE id=? AND version=?", (rid, version)
         ).fetchone()
         if not row or not row["snapshot"]:
-            raise RuleError(f"找不到 {rid} 的版本 {version}")
+            raise RuleError(f"version {version} of {rid} not found")
         snap = json.loads(row["snapshot"])
         return self.upsert(snap, actor=actor, require_tests=False)
 
@@ -242,7 +245,7 @@ class RuleStore:
 
 
 def seed_from_legacy(store: "RuleStore") -> int:
-    """把现有硬编码 middleware 的正则规则一次性灌入库；返回导入条数。"""
+    """Bulk-load the regex rules from the existing hardcoded middleware into the store; returns the number imported."""
     try:
         from gateway.middlewares import injection, command_exec, prompt_injection
     except Exception:
@@ -270,9 +273,9 @@ def seed_from_legacy(store: "RuleStore") -> int:
 
     for i, p in enumerate(prompt_injection._PATTERNS):
         put(f"prompt_injection-{i}", "prompt_injection", "prompt_injection",
-            "LLM01: Prompt Injection", 75, "疑似提示词注入 / 越狱", [p.pattern])
+            "LLM01: Prompt Injection", 75, "suspected prompt injection / jailbreak", [p.pattern])
 
-    # 非 regex 引擎：entropy / keyword / sensitive，统一进库
+    # Non-regex engines: entropy / keyword / sensitive, loaded into the store together
     def put_ex(rid, category, name, owasp, score, desc, engine, patterns=None, params=None):
         nonlocal n
         store.upsert({
@@ -284,27 +287,27 @@ def seed_from_legacy(store: "RuleStore") -> int:
         n += 1
 
     put_ex("entropy-high-blob", "entropy", "high_entropy_blob",
-           "LLM01: Prompt Injection", 55, "高熵疑似编码/加密混淆串",
+           "LLM01: Prompt Injection", 55, "high-entropy blob, likely encoded/encrypted obfuscation",
            "entropy", params={"min_len": 24, "min_entropy": 4.5, "compact_ratio": 0.9})
 
     put_ex("keyword-high-risk-action", "keyword", "high_risk_action_keyword",
-           "LLM05: Improper Output Handling", 100, "破坏性高危操作关键词", "keyword",
+           "LLM05: Improper Output Handling", 100, "destructive high-risk operation keywords", "keyword",
            params={"keywords": [
                "delete", "drop", "truncate", "rm", "format", "destroy", "wipe",
                "shutdown", "reboot", "mkfs", "unlink", "rmdir", "del", "kill",
                "drop table", "drop database", "rm -rf"]})
 
     sens = [
-        ("api_key", 95, r"\bsk-[A-Za-z0-9_\-]{16,}\b", "keep:3,4", "检测到 API 密钥（sk-...）"),
-        ("jwt", 90, r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b", "keep:6,4", "检测到 JWT 令牌"),
-        ("credit_card", 90, r"\b(?:\d[ -]?){13,16}\b", "cc_last4", "检测到信用卡号"),
-        ("id_card", 85, r"\b\d{17}[\dXx]\b", "keep:4,4", "检测到身份证号"),
-        ("phone", 70, r"\b1[3-9]\d{9}\b", "keep:3,4", "检测到手机号"),
+        ("api_key", 95, r"\bsk-[A-Za-z0-9_\-]{16,}\b", "keep:3,4", "detected API key (sk-...)"),
+        ("jwt", 90, r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b", "keep:6,4", "detected JWT token"),
+        ("credit_card", 90, r"\b(?:\d[ -]?){13,16}\b", "cc_last4", "detected credit card number"),
+        ("id_card", 85, r"\b\d{17}[\dXx]\b", "keep:4,4", "detected national ID number"),
+        ("phone", 70, r"\b1[3-9]\d{9}\b", "keep:3,4", "detected phone number"),
         ("intranet_ip", 60,
          r"\b(?:10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}"
          r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3})\b",
-         "ip_last_octet", "检测到内网 IP 地址"),
-        ("email", 50, r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "email", "检测到电子邮箱地址"),
+         "ip_last_octet", "detected internal-network IP address"),
+        ("email", 50, r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "email", "detected email address"),
     ]
     for nm, score, pat, mask, desc in sens:
         put_ex(f"sensitive-{nm}", "sensitive", nm,

@@ -1,107 +1,107 @@
-# API 参考
+# API Reference
 
-Base URL 默认 `http://localhost:3001`。写操作 `actor` 查询参数标识调用方(默认 `external-agent`)。
+Base URL defaults to `http://localhost:3001`. For write operations, the `actor` query parameter identifies the caller (default `external-agent`).
 
 ---
 
-## 一、检测 / 接入端点
+## 1. Detection / Integration Endpoints
 
-### POST /chat — 输入守卫
-请求:`{"prompt": "...", "session_id": "可选"}`
-- 通过:`200 {"request_id","blocked":false,"reply","cost_ms"}`
-- 拦截:`403 {"request_id","blocked":true,"reason","detail":{...hit},"auto_banned","cost_ms"}`
-- 仅当 `risk_score >= policy.block_threshold` 才拦;命中拦截会累计自动封禁。
+### POST /chat — Input Guard
+Request: `{"prompt": "...", "session_id": "optional"}`
+- Pass: `200 {"request_id","blocked":false,"reply","cost_ms"}`
+- Block: `403 {"request_id","blocked":true,"reason","detail":{...hit},"auto_banned","cost_ms"}`
+- Blocks only when `risk_score >= policy.block_threshold`; each block hit counts toward auto-ban.
 
-### POST /confirm-action — 动作守卫
-请求:`{"action_name","action_params":{},"agent_id","user_input":"","context":null}`
-响应:`200 {"request_id","allowed","reason","rule_hit","risk_score"}`
-- 破坏性关键词硬阻断优先;否则过检测器链。
+### POST /confirm-action — Action Guard
+Request: `{"action_name","action_params":{},"agent_id","user_input":"","context":null}`
+Response: `200 {"request_id","allowed","reason","rule_hit","risk_score"}`
+- Destructive-keyword hard block takes priority; otherwise runs through the detector chain.
 
-### POST /scan — Skill 扫描
-请求:`{"skill_name","skill_content"}`
-响应:`200 {"is_malicious","risk_score","findings":[{"rule_hit","owasp_ast","severity","description","matched_content"}],"scan_duration_ms"}`
-- 多引擎逐规则命中(多 finding),敏感信息在 `matched_content` 已脱敏。
+### POST /scan — Skill Scan
+Request: `{"skill_name","skill_content"}`
+Response: `200 {"is_malicious","risk_score","findings":[{"rule_hit","owasp_ast","severity","description","matched_content"}],"scan_duration_ms"}`
+- Multi-engine, rule-by-rule matching (multiple findings); sensitive info is already masked in `matched_content`.
 
-### POST /v1/chat/completions — OpenAI 兼容检测代理
-请求:OpenAI ChatCompletion 格式 `{"model","messages":[{"role","content"}], ...}`;可带头 `X-Agent-Id`。
-响应:标准 ChatCompletion + 附加 `x_sentinel:{blocked,risk_score,...}`
-- 入参检测命中且超阈值 → 返回拒答(`x_sentinel.blocked=true`);否则转发上游(未配置上游则模拟放行)。
-- 接入:任意语言 OpenAI SDK 设 `base_url=<gateway>/v1` 即可,零改动。
+### POST /v1/chat/completions — OpenAI-compatible Detection Proxy
+Request: OpenAI ChatCompletion format `{"model","messages":[{"role","content"}], ...}`; may include the `X-Agent-Id` header.
+Response: standard ChatCompletion + an extra `x_sentinel:{blocked,risk_score,...}`
+- If the input is detected as a hit and exceeds the threshold → returns a refusal (`x_sentinel.blocked=true`); otherwise forwards to the upstream (simulated/allowed if no upstream is configured).
+- Integration: any-language OpenAI SDK just sets `base_url=<gateway>/v1`, no code changes.
 
 ### GET /health
 `200 {"status":"ok","detector_count":N}`
 
 ---
 
-## 二、风险处置 API(外部 agent 可联调)
+## 2. Risk Disposition API (external agents can integrate)
 
-### IP 封禁 `/bans`
+### IP Bans `/bans`
 
-| 方法 | 路径 | 入参 | 说明 |
+| Method | Path | Params | Description |
 |---|---|---|---|
-| GET | `/bans` | — | 生效封禁列表(含 `remaining_seconds`) |
+| GET | `/bans` | — | List of active bans (incl. `remaining_seconds`) |
 | GET | `/bans/{ip}` | — | `{ip,banned,record}` |
-| POST | `/bans` | `{ip,type:"temp"\|"permanent",ttl_seconds?,reason}` | temp 默认 3600s |
-| DELETE | `/bans/{ip}` | — | 解封 |
+| POST | `/bans` | `{ip,type:"temp"\|"permanent",ttl_seconds?,reason}` | temp defaults to 3600s |
+| DELETE | `/bans/{ip}` | — | Unban |
 
-被封 IP 的请求在**进入检测前**由中间件 403 拦下(管理面 `/bans /rules /policy /health` 豁免)。
+Requests from banned IPs are blocked with 403 by the middleware **before detection** (the management plane `/bans /rules /policy /health` is exempt).
 
-### 策略 / 阈值 `/policy`
+### Policy / Threshold `/policy`
 
-| 方法 | 路径 | 入参 | 说明 |
+| Method | Path | Params | Description |
 |---|---|---|---|
-| GET | `/policy` | — | 当前阈值 + 自动封禁参数 |
-| PUT | `/policy` | `{block_threshold,suspicious_threshold,auto_ban_enabled,auto_ban_max_blocks,auto_ban_window_s,auto_ban_ttl_s}` | 部分更新,阈值 0–100 |
-| POST | `/policy/preset/{name}` | `name∈strict\|balanced\|lenient` | 一键预设 |
-| POST | `/policy/optimize` | `{rules:[...],enable:[],disable:[],policy:{},dry_run:false}` | **批量原子调整**:全量预校验,任一失败整批 400;`dry_run` 仅预览 |
-| GET | `/policy/stats` | — | 各规则命中次数(含从未命中的启用规则) |
-| POST | `/policy/optimize/suggest` | — | 启发式优化建议(从未命中/Top 命中) |
+| GET | `/policy` | — | Current thresholds + auto-ban parameters |
+| PUT | `/policy` | `{block_threshold,suspicious_threshold,auto_ban_enabled,auto_ban_max_blocks,auto_ban_window_s,auto_ban_ttl_s}` | Partial update, thresholds 0–100 |
+| POST | `/policy/preset/{name}` | `name∈strict\|balanced\|lenient` | One-click preset |
+| POST | `/policy/optimize` | `{rules:[...],enable:[],disable:[],policy:{},dry_run:false}` | **Atomic batch adjustment**: full pre-validation, whole batch returns 400 if any item fails; `dry_run` only previews |
+| GET | `/policy/stats` | — | Hit count per rule (incl. enabled rules that never matched) |
+| POST | `/policy/optimize/suggest` | — | Heuristic optimization suggestions (never-hit / top hits) |
 
-预设值:`strict`(阈值50+自动封禁开)/`balanced`(70)/`lenient`(90)。
+Preset values: `strict` (threshold 50 + auto-ban on) / `balanced` (70) / `lenient` (90).
 
-### 检测规则 `/rules`
+### Detection Rules `/rules`
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 |---|---|---|
-| GET | `/rules?category=&enabled=&tag=&q=` | 查询/搜索 |
-| GET | `/rules/{id}` | 取单条 |
-| POST | `/rules/validate` | 干跑校验(regex 编译+ReDoS+自带用例),不写库 |
-| POST | `/rules` | 新增(校验+测试门禁→入库→热加载) |
-| PUT | `/rules/{id}` | 修改 |
-| PATCH | `/rules/{id}/enable` · `/disable` | 启停(即时生效) |
-| DELETE | `/rules/{id}` | 删除 |
-| POST | `/rules/{id}/test` | `{samples:[...]}` 对该规则试跑 |
-| GET | `/rules/{id}/versions` | 版本历史 |
-| POST | `/rules/{id}/rollback/{version}` | 回滚 |
-| POST | `/rules/reload` | 手动热加载 |
+| GET | `/rules?category=&enabled=&tag=&q=` | Query/search |
+| GET | `/rules/{id}` | Fetch one |
+| POST | `/rules/validate` | Dry-run validation (regex compile + ReDoS + built-in test cases), does not write to the store |
+| POST | `/rules` | Create (validate + test gate → store → hot-reload) |
+| PUT | `/rules/{id}` | Update |
+| PATCH | `/rules/{id}/enable` · `/disable` | Enable/disable (takes effect immediately) |
+| DELETE | `/rules/{id}` | Delete |
+| POST | `/rules/{id}/test` | `{samples:[...]}` test-run against this rule |
+| GET | `/rules/{id}/versions` | Version history |
+| POST | `/rules/{id}/rollback/{version}` | Rollback |
+| POST | `/rules/reload` | Manual hot-reload |
 
-**规则体字段**:
+**Rule body fields**:
 ```json
 {
-  "id": "唯一id", "name": "规则名", "category": "分组",
+  "id": "unique id", "name": "rule name", "category": "group",
   "owasp_ast": "LLM01: Prompt Injection",
   "severity_score": 90,
   "engine": "regex | sensitive | keyword | entropy",
-  "patterns": ["正则..."],
+  "patterns": ["regex..."],
   "flags": ["IGNORECASE"],
   "params": { "keywords": ["..."], "min_entropy": 4.5, "mask": "keep:3,4" },
-  "enabled": true, "tags": ["..."], "description_zh": "中文说明",
+  "enabled": true, "tags": ["..."], "description_zh": "description",
   "test_cases": { "should_match": ["..."], "should_not_match": ["..."] }
 }
 ```
-- 调阈值 = 改 `severity_score` 或 entropy 的 `params.min_entropy`。
-- 掩码描述符(sensitive 引擎 `params.mask`):`keep:H,T` / `email` / `ip_last_octet` / `cc_last4`。
-- 写入校验:regex 必须可编译、长度上限、基础 ReDoS 拒绝;带 `test_cases` 则必须通过才入库。
+- Tune thresholds = change `severity_score`, or the entropy engine's `params.min_entropy`.
+- Mask descriptor (sensitive engine `params.mask`): `keep:H,T` / `email` / `ip_last_octet` / `cc_last4`.
+- Write validation: regex must compile, length is capped, basic ReDoS is rejected; if `test_cases` are present they must pass before storing.
 
 ---
 
-## 三、联调闭环示例
+## 3. Integration Closed-Loop Example
 
 ```
-读 Splunk 找误报/攻击
-  → GET /policy/stats 看命中  → POST /policy/optimize/suggest 拿建议
-  → POST /policy/optimize {dry_run:true} 预览
-  → POST /policy/optimize 正式应用(改规则+阈值，原子)
-  → POST /bans 封禁恶意来源（或 PUT /policy 开自动封禁）
-  → 改动即时热加载，rule_admin / disposition 审计回 Splunk
+Read Splunk to find false positives / attacks
+  → GET /policy/stats to see hits  → POST /policy/optimize/suggest to get suggestions
+  → POST /policy/optimize {dry_run:true} to preview
+  → POST /policy/optimize to apply for real (change rules + thresholds, atomic)
+  → POST /bans to ban malicious sources (or PUT /policy to enable auto-ban)
+  → changes hot-reload immediately; rule_admin / disposition audit flows back to Splunk
 ```

@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-数据驱动检测引擎（多引擎）/ Rule-driven detector
-==============================================
-从 rule_store 读 enabled 规则，按 engine 类型分派执行：
-  regex      正则
-  sensitive  正则 + 声明式掩码（params.mask）
-  keyword    关键词边界匹配（params.keywords）
-  entropy    高熵启发式（params.min_len / min_entropy / compact_ratio）
+Rule-driven detector (multi-engine)
+===================================
+Reads enabled rules from rule_store and dispatches by engine type:
+  regex      regular expression
+  sensitive  regex + declarative masking (params.mask)
+  keyword    keyword boundary matching (params.keywords)
+  entropy    high-entropy heuristic (params.min_len / min_entropy / compact_ratio)
 
-对外：
-  detect(text)      取最高分命中（供 /chat 等单结果场景）
-  detect_all(text)  返回逐规则命中列表（供 /scan 多 finding）
-  reload()          规则改动后热加载
+Public API:
+  detect(text)      return the highest-scoring hit (for single-result paths like /chat)
+  detect_all(text)  return a per-rule list of hits (for /scan multi-finding)
+  reload()          hot-reload after rule changes
 """
 
 import re
@@ -36,7 +36,7 @@ def _keep(v: str, head: int, tail: int) -> str:
 
 
 def _apply_mask(value: str, desc) -> str:
-    """按声明式描述符脱敏。"""
+    """Mask the value according to a declarative descriptor."""
     if not desc:
         return value
     if desc == "email":
@@ -77,7 +77,7 @@ class _Engine:
         self.sens: List[tuple] = []
         self.kw: List[tuple] = []
         self.ent: List[tuple] = []
-        self.hits: Counter = Counter()   # 规则命中计数（跨 reload 累计），供反馈优化
+        self.hits: Counter = Counter()   # per-rule hit counts (cumulative across reloads), for feedback tuning
         self.reload()
 
     def reload(self) -> int:
@@ -107,7 +107,7 @@ class _Engine:
                 elif eng == "entropy":
                     self.ent.append((sc, nm, ow, de, params))
             except re.error:
-                continue  # 坏规则跳过，不拖垮引擎
+                continue  # skip a bad rule rather than break the whole engine
         return self.count()
 
     def count(self) -> int:
@@ -149,7 +149,7 @@ class _Engine:
                             "owasp_ast": ow, "details": {"matched_string": snip,
                                                          "rule_description": de}})
         for h in out:
-            self.hits[h["rule_hit"]] += 1   # 命中计数，供反馈优化
+            self.hits[h["rule_hit"]] += 1   # hit count, for feedback tuning
         return out
 
     def detect(self, text: str) -> Dict[str, Any]:
@@ -179,5 +179,5 @@ def reload() -> int:
 
 
 def stats() -> Dict[str, int]:
-    """各规则累计命中次数（rule_hit -> count），供反馈优化。"""
+    """Cumulative hit count per rule (rule_hit -> count), for feedback tuning."""
     return ENGINE.stats()

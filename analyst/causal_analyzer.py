@@ -91,22 +91,25 @@ def detect_emergence(tree: DecisionTree) -> list[EmergentAnomaly]:
         if node.span.message_to and not node.span.is_registered_action:
             anomalies.append(EmergentAnomaly(
                 anomaly_type=AnomalyType.UNAUTHORIZED_COMMUNICATION, severity="high",
-                description=f"Agent [{node.span.agent_id}] 私下通知 [{node.span.message_to}]",
+                description=f"Agent [{node.span.agent_id}] privately notified [{node.span.message_to}]",
                 involved_span_ids=[node.span.span_id],
-                evidence=f"action='{node.span.action}' 不在标准action中",
+                evidence=f"action='{node.span.action}' is not in the standard action set",
                 agent_ids=[node.span.agent_id, node.span.message_to],
             ))
 
     neg = Counter()
+    neg_spans: dict[tuple, list[str]] = {}
     for node in all_nodes:
         if node.span.message_to:
-            neg[(node.span.agent_id, node.span.message_to, node.span.action)] += 1
+            key = (node.span.agent_id, node.span.message_to, node.span.action)
+            neg[key] += 1
+            neg_spans.setdefault(key, []).append(node.span.span_id)
     for (a, b, act), cnt in neg.items():
         if cnt > 3:
             anomalies.append(EmergentAnomaly(
                 anomaly_type=AnomalyType.EXCESSIVE_NEGOTIATION, severity="medium",
-                description=f"Agent [{a}] 与 [{b}] 重复协商 {cnt} 次",
-                involved_span_ids=[n.span.span_id for n in all_nodes],
+                description=f"Agent [{a}] repeatedly negotiated with [{b}] {cnt} times via '{act}'",
+                involved_span_ids=neg_spans[(a, b, act)],
                 evidence=f"x{cnt}", agent_ids=[a, b],
             ))
 
@@ -114,7 +117,7 @@ def detect_emergence(tree: DecisionTree) -> list[EmergentAnomaly]:
         if node.span.metadata.get("rule_bypass"):
             anomalies.append(EmergentAnomaly(
                 anomaly_type=AnomalyType.RULE_BYPASS, severity="high",
-                description=f"Agent [{node.span.agent_id}] 绕过流程",
+                description=f"Agent [{node.span.agent_id}] bypassed the workflow",
                 involved_span_ids=[node.span.span_id],
                 evidence=node.span.metadata.get("bypass_detail", ""),
                 agent_ids=[node.span.agent_id],
@@ -124,7 +127,7 @@ def detect_emergence(tree: DecisionTree) -> list[EmergentAnomaly]:
         if node.span.is_error and not node.span.metadata.get("correction_of"):
             anomalies.append(EmergentAnomaly(
                 anomaly_type=AnomalyType.REASONING_ERROR, severity="high",
-                description=f"Agent [{node.span.agent_id}] 推理错误",
+                description=f"Agent [{node.span.agent_id}] reasoning error",
                 involved_span_ids=[node.span.span_id],
                 evidence=f"error={node.span.metadata.get('error_detail', '')}",
                 agent_ids=[node.span.agent_id],
@@ -134,7 +137,7 @@ def detect_emergence(tree: DecisionTree) -> list[EmergentAnomaly]:
         if node.span.metadata.get("collusion_indicator"):
             anomalies.append(EmergentAnomaly(
                 anomaly_type=AnomalyType.COLLUSION, severity="critical",
-                description=f"Agent [{node.span.agent_id}] 与 [{node.span.message_to or '?'}] 疑似共谋",
+                description=f"Agent [{node.span.agent_id}] suspected of colluding with [{node.span.message_to or '?'}]",
                 involved_span_ids=[node.span.span_id],
                 evidence=node.span.metadata.get("collusion_detail", ""),
                 agent_ids=[node.span.agent_id, node.span.message_to or "unknown"],
@@ -147,6 +150,6 @@ def generate_storyline(tree: DecisionTree) -> str:
     """Generate a brief storyline from a decision tree."""
     timeline = tree.get_timeline()
     if not timeline:
-        return "（空决策树）"
+        return "(empty decision tree)"
     agents = tree.metadata.get("agent_ids", [])
-    return f"共 {len(agents)} 个Agent: {'、'.join(agents)}，{tree.total_steps} 步。"
+    return f"{len(agents)} agents total: {', '.join(agents)}, {tree.total_steps} steps."

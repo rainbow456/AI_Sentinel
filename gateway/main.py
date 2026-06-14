@@ -16,7 +16,7 @@ Core capabilities:
 # Load .env before any other imports (env vars must be set before modules are imported)
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -44,12 +44,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# EN: async Splunk HEC sender (global singleton) and its event model.
-#     Dual import so the app runs as both `gateway.main:app` (from repo root)
-#     and `main:app` (from inside the gateway/ dir).
-# 中文：异步 Splunk HEC 发送器（全局单例）及其事件模型。
-#     双重导入，使应用既能以 `gateway.main:app`（仓库根目录）运行，
-#     也能以 `main:app`（在 gateway/ 目录内）运行。
+# Async Splunk HEC sender (global singleton) and its event model.
+# Dual import so the app runs as both `gateway.main:app` (from repo root)
+# and `main:app` (from inside the gateway/ dir).
 try:
     from gateway.mcp_sender import sender, sink, SecurityEvent
     from gateway.preprocess import expand as expand_input
@@ -140,12 +137,14 @@ def load_detectors() -> List[tuple]:
             )
             continue
 
-        # 被规则库取代的旧硬编码检测器标记 SUPERSEDED=True，跳过自动加载
+        # Legacy hard-coded detectors replaced by the rule store are marked
+        # SUPERSEDED=True; skip auto-loading them.
         if getattr(module, "SUPERSEDED", False):
             continue
 
-        # 标记 MANUAL=True 的模块（如 llm_semantic）不进无条件检测链，
-        # 由分级编排器（run_detectors → semantic_adjudicate）按需显式调用。
+        # Modules marked MANUAL=True (e.g. llm_semantic) are not part of the
+        # unconditional detection chain; the tiered orchestrator
+        # (run_detectors -> semantic_adjudicate) invokes them explicitly on demand.
         if getattr(module, "MANUAL", False):
             continue
 
@@ -211,10 +210,9 @@ def run_detectors(prompt: str, request_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# LLM 语义裁决（第二层）/ tiered LLM semantic adjudication
+# Tiered LLM semantic adjudication (second layer)
 # ---------------------------------------------------------------------------
-# EN: lazily imported so a missing/disabled semantic module never breaks the gateway.
-# 中文：惰性导入，语义模块缺失或禁用都不影响网关主流程。
+# Lazily imported so a missing/disabled semantic module never breaks the gateway.
 try:
     from gateway.middlewares import llm_semantic
 except Exception:  # pragma: no cover
@@ -228,17 +226,13 @@ def semantic_adjudicate(
     prompt: str, rule_hit: Optional[Dict[str, Any]], request_id: str
 ) -> Optional[Dict[str, Any]]:
     """
-    EN: Second-layer semantic adjudication on top of the rule-layer result.
-        Tiered to control latency/cost — the LLM is consulted ONLY when the
-        rules are uncertain:
-          1) rules already decisive (score >= block_threshold) -> skip LLM, keep hit;
-          2) gray zone or clean -> ask Claude; escalate if it finds what rules missed;
-          3) optional, flag-gated -> de-escalate a low-risk false positive.
-        Fail-soft: any error / disabled / timeout keeps the rule-layer result.
-    中文：在规则层结论之上做第二层语义裁决。分级触发以控延迟/成本——仅当规则「拿不准」
-        时才调用 LLM：①规则已可判拦（分数≥block_threshold）→ 不调 LLM，保留命中；
-        ②灰区或未命中 → 交给 Claude，发现规则漏掉的攻击则升级；③可选、需开关 → 对低危
-        误报降噪。Fail-soft：出错/未启用/超时一律保留规则层结论。
+    Second-layer semantic adjudication on top of the rule-layer result.
+    Tiered to control latency/cost — the LLM is consulted ONLY when the
+    rules are uncertain:
+      1) rules already decisive (score >= block_threshold) -> skip LLM, keep hit;
+      2) gray zone or clean -> ask Claude; escalate if it finds what rules missed;
+      3) optional, flag-gated -> de-escalate a low-risk false positive.
+    Fail-soft: any error / disabled / timeout keeps the rule-layer result.
     """
     if llm_semantic is None or not llm_semantic.is_enabled():
         return rule_hit
@@ -247,14 +241,14 @@ def semantic_adjudicate(
     block = int(pol.get("block_threshold", 70))
     rule_score = int((rule_hit or {}).get("risk_score", 0))
 
-    # ① 规则层已可判拦，无需再付 LLM 延迟
+    # 1) Rules already decisive -> no need to pay the LLM latency.
     if rule_hit is not None and rule_score >= block:
         return rule_hit
 
-    # ② 灰区 / 未命中：交给语义裁决（在洗白后的视图上判断）
+    # 2) Gray zone / no hit: hand off to semantic adjudication (on the de-obfuscated view).
     try:
         verdict = llm_semantic.classify(expand_input(prompt), context={"rule_hit": rule_hit})
-    except Exception as exc:  # 双保险：classify 内已 fail-soft，这里再兜一层
+    except Exception as exc:  # belt-and-suspenders: classify is already fail-soft, this is a backstop
         log.warning("semantic_adjudicate raised",
                     extra={"event": {"request_id": request_id, "error": str(exc)}})
         return rule_hit
@@ -263,7 +257,7 @@ def semantic_adjudicate(
 
     llm_score = int(verdict.get("risk_score", 0))
 
-    # 升级：LLM 发现了规则层漏掉/低估的攻击
+    # Escalate: the LLM found an attack the rule layer missed or underestimated.
     if verdict.get("is_malicious") and llm_score > rule_score:
         hit = dict(verdict)
         hit.setdefault("detector", "llm_semantic")
@@ -274,7 +268,7 @@ def semantic_adjudicate(
         )
         return hit
 
-    # ③ 降噪（需 LLM_DETECT_ALLOW_DEESCALATE 开启）：对低危误报清除
+    # 3) De-escalate (requires LLM_DETECT_ALLOW_DEESCALATE): clear a low-risk false positive.
     if (rule_hit is not None and not verdict.get("is_malicious")
             and llm_semantic.allow_deescalate()
             and rule_score < block
@@ -292,26 +286,22 @@ def semantic_adjudicate(
 
 
 # ---------------------------------------------------------------------------
-# High-risk action keywords / 高危操作关键词
+# High-risk action keywords
 # ---------------------------------------------------------------------------
-# EN: Gateway identity & downstream LLM provider, used in emitted events.
-# 中文：网关标识与下游 LLM 提供方，用于上报的事件中。
+# Gateway identity & downstream LLM provider, used in emitted events.
 GATEWAY_ID = os.getenv("GATEWAY_ID", "gateway-01")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
-# EN: Destructive verbs that should hard-block an Agent action outright.
-# 中文：会直接硬阻断 Agent 操作的破坏性高危词。
+# Destructive verbs that should hard-block an Agent action outright.
 HIGH_RISK_KEYWORDS: List[str] = [
     "delete", "drop", "truncate", "rm", "format", "destroy", "wipe",
     "shutdown", "reboot", "mkfs", "unlink", "rmdir", "del", "kill",
     "drop table", "drop database", "rm -rf",
 ]
 
-# EN: One pre-compiled, case-insensitive regex over all keywords. Boundaries use
-#     alphanumeric lookarounds (NOT \b) so snake_case action names like
-#     "delete_user" / "drop_table" are still caught (underscore acts as a separator).
-# 中文：将所有关键词预编译为一条大小写不敏感的正则。边界使用「字母数字环视」而非 \b，
-#     这样像 "delete_user" / "drop_table" 这类 snake_case 操作名也能命中（下划线视作分隔符）。
+# One pre-compiled, case-insensitive regex over all keywords. Boundaries use
+# alphanumeric lookarounds (NOT \b) so snake_case action names like
+# "delete_user" / "drop_table" are still caught (underscore acts as a separator).
 _HIGH_RISK_RE: re.Pattern = re.compile(
     r"(?<![A-Za-z0-9])(?:" + "|".join(re.escape(k) for k in HIGH_RISK_KEYWORDS)
     + r")(?![A-Za-z0-9])",
@@ -321,10 +311,8 @@ _HIGH_RISK_RE: re.Pattern = re.compile(
 
 def check_high_risk_keywords(text: str) -> Optional[Dict[str, Any]]:
     """
-    EN: Scan text for destructive keywords. A hit hard-blocks the action.
-        Returns a detector-shaped dict, or None when clean.
-    中文：扫描文本中的破坏性关键词，命中即硬阻断操作。
-        命中返回与检测器一致结构的 dict，否则返回 None。
+    Scan text for destructive keywords. A hit hard-blocks the action.
+    Returns a detector-shaped dict, or None when clean.
     """
     match = _HIGH_RISK_RE.search(text or "")
     if not match:
@@ -343,10 +331,8 @@ def check_high_risk_keywords(text: str) -> Optional[Dict[str, Any]]:
 
 def mask_user_input(text: str, max_len: int = 500) -> str:
     """
-    EN: Lightweight desensitization for logging/SIEM -- redact obvious secrets
-        (API keys, JWTs, emails, long digit runs) and cap the length.
-    中文：用于日志/SIEM 的轻量脱敏 —— 屏蔽明显的密文（API Key、JWT、邮箱、
-        长数字串）并截断长度。
+    Lightweight desensitization for logging/SIEM -- redact obvious secrets
+    (API keys, JWTs, emails, long digit runs) and cap the length.
     """
     if not text:
         return ""
@@ -363,8 +349,9 @@ def mask_user_input(text: str, max_len: int = 500) -> str:
 
 def emit_event_async(event: SecurityEvent) -> None:
     """
-    把事件交给可靠投递管线（内存队列 + 批量 + 重试 + 磁盘 spool）。
-    非阻塞，绝不拖慢请求；Splunk 抖动时落盘，恢复后回放，不丢数据。
+    Hand the event to the reliable delivery pipeline (in-memory queue + batching
+    + retry + disk spool). Non-blocking, never slows down the request; spools to
+    disk when Splunk is flaky and replays on recovery, so no data is lost.
     """
     sink.submit(event)
 
@@ -382,10 +369,7 @@ class ChatRequest(BaseModel):
 
 
 class ConfirmActionRequest(BaseModel):
-    """
-    EN: High-risk action confirmation request body submitted by the victim Agent.
-    中文：受害者 Agent 提交的高危操作确认请求体。
-    """
+    """High-risk action confirmation request body submitted by the victim Agent."""
 
     action_name: str = Field(..., description="Action to confirm, e.g. delete_user / transfer_funds")
     action_params: Dict[str, Any] = Field(default_factory=dict, description="Action parameters")
@@ -395,45 +379,44 @@ class ConfirmActionRequest(BaseModel):
 
 
 class SkillScanRequest(BaseModel):
-    """EN: A skill payload to scan. / 中文：待扫描的技能内容。"""
+    """A skill payload to scan."""
 
-    skill_name: str = Field(..., description="Skill identifier / 技能名称")
-    skill_content: str = Field(..., description="Skill body to inspect / 技能正文内容")
+    skill_name: str = Field(..., description="Skill identifier")
+    skill_content: str = Field(..., description="Skill body to inspect")
 
 
-# EN: Short Chinese blurb per rule, surfaced in scan findings.
-# 中文：每条规则对应的简短中文说明，用于扫描结果。
+# Short blurb per rule, surfaced in scan findings.
 _RULE_BLURB_ZH: Dict[str, str] = {
-    "system_instruction_override": "试图覆盖或忽略先前的系统指令",
-    "jailbreak": "检测到越狱触发词（DAN / 无限制人格）",
-    "role_play": "强制模型扮演新角色以绕过策略",
-    "prompt_leak": "试图套取系统提示词",
-    "token_smuggling": "通过编码 / 零宽字符走私隐藏指令",
-    "context_manipulation": "注入伪造角色或对话模板标记",
-    "api_manipulation": "篡改模型参数、工具或函数调用",
-    "indirect_injection": "面向读取外部内容的 AI 的隐藏指令",
-    "multilingual": "非英文（中文 / 西 / 法等）注入攻击",
-    "output_hijacking": "强制逐字 / 受限输出以绕过安全措辞",
-    "api_key": "检测到 API 密钥（sk-...）",
-    "jwt": "检测到 JWT 令牌",
-    "credit_card": "检测到信用卡号",
-    "id_card": "检测到身份证号",
-    "phone": "检测到手机号",
-    "intranet_ip": "检测到内网 IP 地址",
-    "email": "检测到电子邮箱地址",
-    "high_entropy_blob": "检测到高熵的疑似编码 / 加密混淆串",
-    "shell_process_exec": "检测到进程 / shell 执行调用（os.system、subprocess 等）",
-    "dynamic_code_eval": "检测到动态代码执行或不安全反序列化（eval / exec / pickle 等）",
-    "destructive_command": "检测到破坏性系统命令（rm -rf、格式化磁盘、关机等）",
-    "remote_payload_exec": "检测到远程载荷下载并执行（curl|bash、powershell -enc 等）",
-    "reverse_shell": "检测到反弹 / 绑定 shell 特征",
-    "credential_file_access": "检测到读取凭据或敏感系统文件（/etc/shadow、.ssh、.aws 等）",
-    "privilege_persistence": "检测到提权或持久化操作（chmod +s、计划任务、Run 键等）",
+    "system_instruction_override": "Attempts to override or ignore prior system instructions",
+    "jailbreak": "Jailbreak trigger detected (DAN / unrestricted persona)",
+    "role_play": "Forces the model into a new role to bypass policy",
+    "prompt_leak": "Attempts to extract the system prompt",
+    "token_smuggling": "Smuggles hidden instructions via encoding / zero-width characters",
+    "context_manipulation": "Injects forged role or conversation-template markers",
+    "api_manipulation": "Tampers with model parameters, tools, or function calls",
+    "indirect_injection": "Hidden instructions targeting an AI that reads external content",
+    "multilingual": "Non-English (Chinese / Spanish / French, etc.) injection attack",
+    "output_hijacking": "Forces verbatim / constrained output to bypass safety wording",
+    "api_key": "API key detected (sk-...)",
+    "jwt": "JWT token detected",
+    "credit_card": "Credit card number detected",
+    "id_card": "National ID number detected",
+    "phone": "Phone number detected",
+    "intranet_ip": "Internal IP address detected",
+    "email": "Email address detected",
+    "high_entropy_blob": "High-entropy suspected encoded / encrypted obfuscated string detected",
+    "shell_process_exec": "Process / shell execution call detected (os.system, subprocess, etc.)",
+    "dynamic_code_eval": "Dynamic code execution or unsafe deserialization detected (eval / exec / pickle, etc.)",
+    "destructive_command": "Destructive system command detected (rm -rf, disk format, shutdown, etc.)",
+    "remote_payload_exec": "Remote payload download-and-execute detected (curl|bash, powershell -enc, etc.)",
+    "reverse_shell": "Reverse / bind shell signature detected",
+    "credential_file_access": "Access to credential or sensitive system files detected (/etc/shadow, .ssh, .aws, etc.)",
+    "privilege_persistence": "Privilege escalation or persistence operation detected (chmod +s, scheduled tasks, Run keys, etc.)",
 }
 
 
 def _severity_of(score: int) -> str:
-    """Map a 0-100 risk score to a severity band / 将风险分映射为严重等级。"""
+    """Map a 0-100 risk score to a severity band."""
     if score >= 90:
         return "critical"
     if score >= 70:
@@ -444,7 +427,7 @@ def _severity_of(score: int) -> str:
 
 
 def _finding_from_hit(hit: Dict[str, Any]) -> Dict[str, Any]:
-    """把单条检测 hit 归一化为统一 finding（6 字段）。"""
+    """Normalize a single detection hit into a unified finding (6 fields)."""
     details = hit.get("details", {}) or {}
     return {
         "detector": hit.get("detector", ""),
@@ -466,22 +449,24 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# 规则管理 API（外部安全分析 agent 查询/修改检测规则）
+# Rule management API (external security-analysis agent queries/modifies detection rules)
 try:
     from gateway.rules_api import router as rules_router
     from gateway.disposition import (router as bans_router, policy_router,
                                      BanMiddleware, policy_store, record_block, _client_ip)
     from gateway.llm_proxy import router as llm_router
+    from gateway.hold_store import create_hold, get_hold, resolve_hold, hold_stats
 except ImportError:  # pragma: no cover - launched from inside gateway/
     from rules_api import router as rules_router
     from disposition import (router as bans_router, policy_router,
                              BanMiddleware, policy_store, record_block, _client_ip)
     from llm_proxy import router as llm_router
+    from hold_store import create_hold, get_hold, resolve_hold, hold_stats
 app.include_router(rules_router)
 app.include_router(bans_router)
 app.include_router(policy_router)
-app.include_router(llm_router)  # OpenAI 兼容检测代理：/v1/chat/completions
-# 前置处置：被封禁 IP 在进入检测前就被 403 拦下
+app.include_router(llm_router)  # OpenAI-compatible detecting proxy: /v1/chat/completions
+# Pre-processing disposition: banned IPs are rejected with 403 before reaching detection.
 app.add_middleware(BanMiddleware)
 
 
@@ -489,8 +474,9 @@ app.add_middleware(BanMiddleware)
 async def on_startup() -> None:
     """Seed the rule store (first run), load engine + detectors, start sink."""
     global DETECTORS
-    await sink.start()  # 启动可靠投递后台 worker
-    # 规则库为空时，从现有硬编码规则一次性导入；随后热加载数据驱动引擎
+    await sink.start()  # start the reliable-delivery background worker
+    # When the rule store is empty, do a one-time import from the existing hard-coded
+    # rules; then hot-reload the data-driven engine.
     try:
         from gateway.rule_store import RuleStore, seed_from_legacy
         from gateway.middlewares import rule_engine
@@ -505,7 +491,8 @@ async def on_startup() -> None:
 
     DETECTORS = load_detectors()
 
-    # LLM 语义层：软检查。开启但缺 key 只 warning、不 fail——网关照常启动，语义层不生效。
+    # LLM semantic layer: soft check. Enabled-but-missing-key only warns, does not
+    # fail — the gateway starts normally and the semantic layer just stays inactive.
     if llm_semantic is not None:
         reason = llm_semantic.misconfig_reason()
         if reason:
@@ -525,7 +512,7 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    """优雅关闭：先 flush 投递管线（不丢在途事件），再关 HTTP 客户端。"""
+    """Graceful shutdown: flush the delivery pipeline first (don't drop in-flight events), then close the HTTP client."""
     await sink.drain()
     await sender.aclose()
 
@@ -533,6 +520,33 @@ async def on_shutdown() -> None:
 # ---------------------------------------------------------------------------
 # 5. Routes
 # ---------------------------------------------------------------------------
+
+# Gray-zone rule_hits that should NOT be held: informational categories like
+# PII / sensitive data / high entropy — entering these into a CRM is a legitimate
+# operation and should not suspend the front-end agent for human review. Only
+# attack-class gray-zone hits are held.
+_NO_HOLD_HITS = {"pii_email", "pii_phone", "pii_url", "email", "phone",
+                 "intranet_ip", "id_card", "credit_card", "high_entropy_blob"}
+
+
+def decide_verdict(hit, pol, allow_hold: bool = True,
+                   no_hold_hits=frozenset()):
+    """
+    Three-state verdict: returns ('allow'|'held'|'block', score).
+      - no hit / score < suspicious_threshold        -> allow (pass through)
+      - score >= block_threshold                      -> block (hard block)
+      - suspicious <= score < block (gray zone)       -> held (suspend, pending analyst + human review)
+        unless allow_hold=False or this rule_hit is in no_hold_hits (informational) -> falls back to allow
+    """
+    score = int((hit or {}).get("risk_score", 0))
+    if hit is None or score < int(pol.get("suspicious_threshold", 40)):
+        return "allow", score
+    if score >= int(pol.get("block_threshold", 70)):
+        return "block", score
+    rh = str((hit.get("rule_hit") or hit.get("detector") or "")).lower()
+    if not allow_hold or rh in no_hold_hits:
+        return "allow", score
+    return "held", score
 
 
 @app.post("/chat")
@@ -559,34 +573,44 @@ async def chat(req: ChatRequest, request: Request) -> JSONResponse:
         },
     )
 
-    # 规则层检测 + LLM 语义裁决（第二层）。在线程池中跑，避免语义调用阻塞事件循环。
+    # Rule-layer detection + LLM semantic adjudication (second layer). Run in a
+    # thread pool so the semantic call doesn't block the event loop.
     hit = await asyncio.to_thread(run_detectors, req.prompt, request_id)
     hit = await asyncio.to_thread(semantic_adjudicate, req.prompt, hit, request_id)
     cost_ms = round((time.perf_counter() - start) * 1000, 2)
 
-    # 按可调阈值判定是否拦截：命中分数 >= block_threshold 才拦（低于阈值=检出但放行）
+    # Three-state verdict: block (>= threshold, hard block) / held (gray-zone hold,
+    # except informational categories like PII) / allow.
     pol = policy_store.get()
-    score = int((hit or {}).get("risk_score", 0))
-    blocked = hit is not None and score >= pol["block_threshold"]
+    verdict, score = decide_verdict(hit, pol, no_hold_hits=_NO_HOLD_HITS)
+    blocked = verdict == "block"
+    held = verdict == "held"
 
-    # 命中即拦时，按自动封禁策略累计该 IP，超阈值自动临时封禁
+    # On a block, accumulate this IP under the auto-ban policy; auto temp-ban once
+    # the threshold is exceeded.
     auto_banned = False
     if blocked:
         auto_banned = record_block(_client_ip(request), pol)
 
-    emit_event_async(
-        SecurityEvent(
-            module="input_guard",
-            blocked=blocked,
-            handler="gateway",
-            risk_score=score,
-            user_input=mask_user_input(req.prompt),
-            agent_id=req.session_id,
-            findings=[_finding_from_hit(hit)] if hit is not None else [],
-            gateway_id=GATEWAY_ID,
-            llm_provider=LLM_PROVIDER,
-        )
+    # Build the event first (event_id doubles as hold_id); for gray-zone, register
+    # the hold, then report to Splunk asynchronously.
+    event = SecurityEvent(
+        module="input_guard",
+        blocked=blocked,
+        held=held,
+        handler="gateway",
+        risk_score=score,
+        user_input=mask_user_input(req.prompt),
+        agent_id=req.session_id,
+        findings=[_finding_from_hit(hit)] if hit is not None else [],
+        gateway_id=GATEWAY_ID,
+        llm_provider=LLM_PROVIDER,
     )
+    if held:
+        create_hold(event.event_id, {"module": "input_guard", "agent_id": req.session_id,
+                                     "risk_score": score,
+                                     "rule_hit": (hit or {}).get("rule_hit")})
+    emit_event_async(event)
 
     if blocked:
         # Blocked: return 403 with hit details
@@ -598,6 +622,23 @@ async def chat(req: ChatRequest, request: Request) -> JSONResponse:
                 "reason": "Input blocked by security detection",
                 "detail": hit,
                 "auto_banned": auto_banned,
+                "cost_ms": cost_ms,
+            },
+        )
+
+    if held:
+        # Held: gray-zone — the front-end agent MUST NOT execute until the
+        # Analyst + a human resolve this hold (release / block).
+        return JSONResponse(
+            status_code=202,
+            content={
+                "request_id": request_id,
+                "blocked": False,
+                "held": True,
+                "status": "held",
+                "hold_id": event.event_id,
+                "reason": "Suspicious input held for analyst review",
+                "detail": hit,
                 "cost_ms": cost_ms,
             },
         )
@@ -621,25 +662,17 @@ async def chat(req: ChatRequest, request: Request) -> JSONResponse:
 @app.post("/confirm-action")
 async def confirm_action(req: ConfirmActionRequest, request: Request) -> JSONResponse:
     """
-    EN: High-risk action confirmation entry for the victim Agent.
+    High-risk action confirmation entry for the victim Agent.
 
-        Flow:
-          1. Merge user_input + action_name + action_params into one text;
-          2. Hard-block on destructive high-risk keywords (delete/drop/rm/...);
-          3. Otherwise run the merged text through all middleware detectors;
-          4. Decide allowed/blocked and emit an action_confirmation event to Splunk.
-    中文：受害者 Agent 的高危操作确认入口。
-
-        流程：
-          1. 合并 user_input + action_name + action_params 为一段文本；
-          2. 命中破坏性高危词（delete/drop/rm/...）直接硬阻断；
-          3. 否则将合并文本送入全部中间件检测器；
-          4. 判定放行/阻断，并向 Splunk 异步上报 action_confirmation 事件。
+    Flow:
+      1. Merge user_input + action_name + action_params into one text;
+      2. Hard-block on destructive high-risk keywords (delete/drop/rm/...);
+      3. Otherwise run the merged text through all middleware detectors;
+      4. Decide allowed/blocked and emit an action_confirmation event to Splunk.
     """
     request_id = str(uuid.uuid4())
 
-    # EN: merge the three sources so detectors see the full action context.
-    # 中文：合并三个来源，使检测器能看到完整的操作上下文。
+    # Merge the three sources so detectors see the full action context.
     params_str = json.dumps(req.action_params, ensure_ascii=False, sort_keys=True)
     merged_text = f"{req.user_input}\n{req.action_name}\n{params_str}"
 
@@ -654,52 +687,59 @@ async def confirm_action(req: ConfirmActionRequest, request: Request) -> JSONRes
         },
     )
 
-    # EN: 1) destructive-keyword hard block has top priority (on the de-obfuscated view).
-    # 中文：1) 破坏性关键词硬阻断，优先级最高（在洗白后的文本上判断）。
+    # 1) Destructive-keyword hard block has top priority (on the de-obfuscated view).
     hit = check_high_risk_keywords(expand_input(merged_text))
-    # EN: 2) fall through to the full detector chain (run_detectors de-obfuscates internally).
-    # 中文：2) 未命中高危词时，运行完整检测器链（run_detectors 内部已做洗白）。
+    # 2) Fall through to the full detector chain (run_detectors de-obfuscates internally).
     if hit is None:
         hit = await asyncio.to_thread(run_detectors, merged_text, request_id)
-    # EN: 3) second-layer LLM semantic adjudication (no-op unless enabled).
-    # 中文：3) 第二层 LLM 语义裁决（未启用时为空操作），捕捉规则漏掉的语义级恶意动作。
+    # 3) Second-layer LLM semantic adjudication (no-op unless enabled); catches
+    #    semantic-level malicious actions the rules missed.
     hit = await asyncio.to_thread(semantic_adjudicate, merged_text, hit, request_id)
 
-    allowed = hit is None
+    # Three-state verdict: allow / held (gray-zone hold, pending analyst + human) /
+    # block (hard block). The action guard exempts no category — high-risk actions
+    # are inherently sensitive.
+    pol = policy_store.get()
+    verdict, risk_score = decide_verdict(hit, pol)
+    allowed = verdict == "allow"
+    held = verdict == "held"
+    blocked = verdict == "block"
+
     if allowed:
         reason = "No risk detected"
         rule_hit: Optional[str] = None
-        risk_score = 0
     else:
         reason = hit.get("details", {}).get("rule_description") \
-            or hit.get("reason") or "Blocked by security policy"
-        # EN: prefer the detector's rule_hit, fall back to its name.
-        # 中文：优先用检测器的 rule_hit，否则回退到检测器名称。
+            or hit.get("reason") \
+            or ("Held for analyst review" if held else "Blocked by security policy")
+        # Prefer the detector's rule_hit, fall back to its name.
         rule_hit = hit.get("rule_hit") or hit.get("detector")
-        risk_score = hit.get("risk_score", 100)
 
-    # EN: async, fail-soft audit to Splunk (module=action_guard).
-    # 中文：异步、软失败地审计上报 Splunk（module=action_guard）。
-    emit_event_async(
-        SecurityEvent(
-            module="action_guard",
-            blocked=not allowed,
-            handler="gateway",
-            risk_score=int((hit or {}).get("risk_score", 0)),
-            user_input=mask_user_input(req.user_input),
-            subject_name=req.action_name,
-            agent_id=req.agent_id,
-            findings=[_finding_from_hit(hit)] if hit else [],
-            gateway_id=GATEWAY_ID,
-            llm_provider=LLM_PROVIDER,
-        )
+    # Async, fail-soft audit to Splunk (module=action_guard). Take event_id as the hold_id first.
+    event = SecurityEvent(
+        module="action_guard",
+        blocked=blocked,
+        held=held,
+        handler="gateway",
+        risk_score=risk_score,
+        user_input=mask_user_input(req.user_input),
+        subject_name=req.action_name,
+        agent_id=req.agent_id,
+        findings=[_finding_from_hit(hit)] if hit else [],
+        gateway_id=GATEWAY_ID,
+        llm_provider=LLM_PROVIDER,
     )
+    if held:
+        create_hold(event.event_id, {"module": "action_guard", "agent_id": req.agent_id,
+                                     "action_name": req.action_name, "risk_score": risk_score,
+                                     "rule_hit": rule_hit})
+    emit_event_async(event)
 
     if not allowed:
         log.warning(
-            "High-risk action blocked",
+            "High-risk action held" if held else "High-risk action blocked",
             extra={"event": {"request_id": request_id, "rule_hit": rule_hit,
-                             "risk_score": risk_score}},
+                             "risk_score": risk_score, "held": held}},
         )
 
     return JSONResponse(
@@ -707,11 +747,60 @@ async def confirm_action(req: ConfirmActionRequest, request: Request) -> JSONRes
         content={
             "request_id": request_id,
             "allowed": allowed,
+            "held": held,
+            "status": "held" if held else ("blocked" if blocked else "allowed"),
+            "hold_id": event.event_id if held else None,
             "reason": reason,
             "rule_hit": rule_hit,
             "risk_score": risk_score,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Hold (gray-zone) lifecycle
+# ---------------------------------------------------------------------------
+# The front-end agent polls GET /hold/{id} after a 'held' verdict; the Analyst
+# (or a human via the dashboard) resolves it through POST /hold/{id}/resolve.
+class ResolveHoldRequest(BaseModel):
+    decision: str = Field(..., description="'release' or 'block'")
+    reason: Optional[str] = Field("", description="Disposition reason")
+    operator: Optional[str] = Field("analyst", description="Who resolved it")
+
+
+@app.get("/hold/{hold_id}")
+async def hold_status(hold_id: str) -> JSONResponse:
+    """Poll a hold's status. 404 if unknown (agent should keep holding / fail-safe)."""
+    rec = get_hold(hold_id)
+    if rec is None:
+        return JSONResponse(status_code=404, content={"hold_id": hold_id, "status": "unknown"})
+    return JSONResponse(status_code=200, content=rec)
+
+
+@app.post("/hold/{hold_id}/resolve")
+async def hold_resolve(hold_id: str, req: ResolveHoldRequest, request: Request) -> JSONResponse:
+    """Resolve a hold (release/block). Idempotent; called by Analyst gateway-control MCP."""
+    rec = resolve_hold(hold_id, req.decision, req.reason or "", req.operator or "analyst")
+    if rec is None:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "unknown hold_id or invalid decision"})
+    # When the verdict is block, accumulate this source under the policy (counts
+    # toward the auto-ban tally, consistent with a hard block).
+    if rec.get("status") == "blocked":
+        try:
+            record_block(_client_ip(request), policy_store.get())
+        except Exception:
+            pass
+    log.info("Hold resolved",
+             extra={"event": {"hold_id": hold_id, "status": rec.get("status"),
+                              "operator": rec.get("operator")}})
+    return JSONResponse(status_code=200, content={"ok": True, "hold": rec})
+
+
+@app.get("/holds")
+async def holds_overview() -> JSONResponse:
+    """Lightweight overview of hold counts (for dashboards / debugging)."""
+    return JSONResponse(status_code=200, content=hold_stats())
 
 
 # Skill scanner endpoint
@@ -738,7 +827,8 @@ async def scan_skill(req: SkillScanRequest, request: Request) -> JSONResponse:
     # / base64-url-html tricks so disguised payloads become detectable.
     scan_view = expand_input(req.skill_content)
 
-    # 统一引擎逐规则命中（多 finding）；其它非 rule_engine 检测器仍取单条
+    # The unified engine yields per-rule hits (multiple findings); other non-rule_engine
+    # detectors still yield a single result.
     try:
         from gateway.middlewares import rule_engine as _re
     except Exception:  # pragma: no cover
@@ -772,7 +862,7 @@ async def scan_skill(req: SkillScanRequest, request: Request) -> JSONResponse:
             "rule_hit": rule,
             "owasp_ast": outcome.get("owasp_ast", ""),
             "severity": _severity_of(score),
-            "description": _RULE_BLURB_ZH.get(rule, evidence.get("rule_description", "检测到可疑内容")),
+            "description": _RULE_BLURB_ZH.get(rule, evidence.get("rule_description", "Suspicious content detected")),
             "matched_content": snippet,
         })
 

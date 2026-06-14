@@ -9,7 +9,8 @@ replaced with a model-based classifier.
 
 import re
 
-# 规则已迁移到 rule_store 规则库，由 middlewares/rule_engine 数据驱动执行。
+# Rules have been migrated to the rule_store rule library and are executed
+# data-driven by middlewares/rule_engine.
 SUPERSEDED = True
 from typing import Dict, Any, List
 

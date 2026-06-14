@@ -1,28 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Dangerous command / code execution detector / 危险命令·代码执行检测器
-======================================================================
-EN: Flags skills that invoke processes, execute code dynamically, run
-    destructive system commands, download-and-run remote payloads, open reverse
-    shells, read credential files, or escalate/persist privileges. Covers
-    Python / shell / PowerShell / Node / PHP. Rule-based, no AI.
-中文：检测会"调用进程、动态执行代码、运行破坏性命令、下载并执行远程载荷、反弹
-    shell、读取凭据文件、提权/持久化"的技能。覆盖 Python / shell / PowerShell /
-    Node / PHP。基于规则，不使用 AI。
+Dangerous command / code execution detector
+============================================
+Flags skills that invoke processes, execute code dynamically, run
+destructive system commands, download-and-run remote payloads, open reverse
+shells, read credential files, or escalate/persist privileges. Covers
+Python / shell / PowerShell / Node / PHP. Rule-based, no AI.
 
-Return / 返回: same shape as the other detectors. / 与其它检测器结构一致。
+Return: same shape as the other detectors.
 """
 
 import re
 
-# 规则已迁移到 rule_store 规则库，由 middlewares/rule_engine 数据驱动执行。
+# Rules have been migrated to the rule_store rule library and are executed
+# data-driven by middlewares/rule_engine.
 SUPERSEDED = True
 from typing import Dict, Any, List, Pattern
 
 _OWASP = "LLM05: Improper Output Handling"
 
 # Each rule = {category, risk_score, description, patterns}. Compiled IGNORECASE.
-# 每条规则 = {类别, 风险分, 描述, 正则}，统一以 IGNORECASE 预编译。
 _RAW_RULES: List[Dict[str, Any]] = [
     {
         # 1. Process / shell execution

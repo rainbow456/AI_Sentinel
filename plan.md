@@ -2,7 +2,7 @@
 
 ## Current State Analysis
 
-**A同学 (Defense Architect)** — `gateway/` module:
+**Member A (Defense Architect)** — `gateway/` module:
 - FastAPI security gateway on port 3001
 - Middleware detectors (injection, sensitive, PII, rule_engine, command_exec, entropy, prompt_injection)
 - Splunk HEC async sender with spooling sink
@@ -11,7 +11,7 @@
 - LLM proxy (OpenAI-compatible /v1/chat/completions)
 - Rules API and Policy API endpoints
 
-**B同学 (Intelligence Analyst)** — `analyst/` module:
+**Member B (Intelligence Analyst)** — `analyst/` module:
 - SecurityAgent with dual-mode (AUTO/OBSERVE)
 - MCP Bridge connecting to 3 MCP servers (Splunk Query, Gateway Control, Rule Engine)
 - Rule engine matching events to security rules

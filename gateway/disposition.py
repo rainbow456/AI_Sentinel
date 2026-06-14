@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-处置模块 / Disposition
-=====================
-IP 封禁（临时 / 永久）+ 请求前置拦截中间件 + /bans 管理 API。
-封禁/解封/拦截命中都审计上报 Splunk（module=disposition）。
+Disposition
+===========
+IP bans (temporary / permanent) + request pre-intercept middleware + /bans admin API.
+Ban / unban / enforcement hits are all audited to Splunk (module=disposition).
 
-存储：SQLite disposition.db（bans 表）。临时封禁到点自动失效。
+Storage: SQLite disposition.db (bans table). Temporary bans expire automatically.
 """
 
 # Load .env before reading env vars at module scope
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -38,7 +38,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "disposition.
 GATEWAY_ID = os.getenv("GATEWAY_ID", "gateway-01")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
-# 管理面 / 健康检查路径前缀：不受 IP 封禁影响，避免把自己锁死。
+# Admin / health-check path prefixes: exempt from IP bans so we don't lock ourselves out.
 _EXEMPT = ("/health", "/bans", "/rules", "/policy", "/docs", "/openapi.json", "/redoc")
 
 
@@ -61,9 +61,9 @@ class BanStore:
     def ban(self, ip: str, type: str = "temp", ttl_seconds: Optional[int] = 3600,
             reason: str = "", actor: str = "external-agent") -> Dict[str, Any]:
         if not ip:
-            raise ValueError("缺少 ip")
+            raise ValueError("missing ip")
         if type not in ("temp", "permanent"):
-            raise ValueError("type 必须是 temp 或 permanent")
+            raise ValueError("type must be temp or permanent")
         until = None if type == "permanent" else self._now() + int(ttl_seconds or 3600)
         self.conn.execute(
             "INSERT OR REPLACE INTO bans (ip, type, reason, until_ts, created_by, created_at) "
@@ -84,12 +84,12 @@ class BanStore:
         return dict(row) if row else None
 
     def is_banned(self, ip: str):
-        """返回 (是否封禁, 记录)。临时封禁过期则顺手清除。"""
+        """Return (is_banned, record). Clears a temporary ban that has expired."""
         rec = self.get(ip)
         if not rec:
             return False, None
         if rec["type"] == "temp" and rec["until_ts"] and rec["until_ts"] <= self._now():
-            self.unban(ip)  # 到点自动失效
+            self.unban(ip)  # auto-expire when the deadline passes
             return False, None
         return True, rec
 
@@ -99,7 +99,7 @@ class BanStore:
         for row in self.conn.execute("SELECT * FROM bans ORDER BY created_at DESC").fetchall():
             r = dict(row)
             if r["type"] == "temp" and r["until_ts"] and r["until_ts"] <= now:
-                continue  # 已过期不展示
+                continue  # skip expired entries
             r["remaining_seconds"] = (r["until_ts"] - now) if r["until_ts"] else None
             out.append(r)
         return out
@@ -109,7 +109,7 @@ store = BanStore()
 
 
 # ---------------------------------------------------------------------------
-# 审计 -> Splunk
+# Audit -> Splunk
 # ---------------------------------------------------------------------------
 def _audit(action: str, ip: str, actor: str, blocked: bool, handler: str, reason: str = ""):
     sink.submit(SecurityEvent(
@@ -121,7 +121,7 @@ def _audit(action: str, ip: str, actor: str, blocked: bool, handler: str, reason
 
 
 def _client_ip(request: Request) -> str:
-    """优先取 X-Forwarded-For 首段（经代理时），否则用直连地址。"""
+    """Prefer the first X-Forwarded-For segment (when behind a proxy); otherwise use the direct peer address."""
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[0].strip()
@@ -129,7 +129,7 @@ def _client_ip(request: Request) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 前置中间件：被封禁 IP 直接 403
+# Pre-intercept middleware: banned IPs get an immediate 403
 # ---------------------------------------------------------------------------
 class BanMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -141,14 +141,14 @@ class BanMiddleware(BaseHTTPMiddleware):
                 _audit("enforce-block", ip, "gateway", blocked=True, handler="gateway",
                        reason=(rec or {}).get("reason", ""))
                 return JSONResponse(status_code=403, content={
-                    "blocked": True, "reason": "IP 已被封禁",
+                    "blocked": True, "reason": "IP is banned",
                     "ip": ip, "ban": {"type": rec["type"], "until_ts": rec["until_ts"]},
                 })
         return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
-# /bans 管理 API
+# /bans admin API
 # ---------------------------------------------------------------------------
 router = APIRouter(prefix="/bans", tags=["bans"])
 
@@ -185,16 +185,16 @@ def create_ban(body: BanIn, actor: str = "external-agent"):
 @router.delete("/{ip}")
 def remove_ban(ip: str, actor: str = "external-agent"):
     if not store.unban(ip):
-        raise HTTPException(404, "该 IP 未在封禁列表")
+        raise HTTPException(404, "this IP is not in the ban list")
     _audit("unban", ip, actor, blocked=False, handler="external")
     return {"unbanned": ip}
 
 
 # ---------------------------------------------------------------------------
-# 策略 / 阈值
+# Policy / thresholds
 # ---------------------------------------------------------------------------
 class PolicyStore:
-    """全局检测策略（单行）：拦截阈值 + 自动封禁参数。"""
+    """Global detection policy (single row): block thresholds + auto-ban parameters."""
 
     DEFAULTS = {
         "block_threshold": 70, "suspicious_threshold": 40, "mode": "balanced",
@@ -257,12 +257,12 @@ PRESETS = {
 
 policy_store = PolicyStore()
 
-# 自动封禁：进程内滑动窗口计数（IP -> 命中时间戳）
+# Auto-ban: in-process sliding-window counter (IP -> hit timestamps)
 _block_log: Dict[str, List[int]] = {}
 
 
 def record_block(ip: str, pol: Dict[str, Any]) -> bool:
-    """记一次该 IP 的拦截；窗口内超过阈值则自动临时封禁。返回是否触发封禁。"""
+    """Record one block for this IP; if it exceeds the threshold within the window, auto-apply a temporary ban. Returns whether a ban was triggered."""
     if not pol.get("auto_ban_enabled") or not ip or ip == "unknown":
         return False
     now = int(time.time())
@@ -302,7 +302,7 @@ def put_policy(body: PolicyIn, actor: str = "external-agent"):
     f = body.model_dump()
     for k in ("block_threshold", "suspicious_threshold"):
         if f.get(k) is not None and not (0 <= f[k] <= 100):
-            raise HTTPException(400, f"{k} 必须 0-100")
+            raise HTTPException(400, f"{k} must be 0-100")
     pol = policy_store.update(f, actor)
     _audit("policy-update", "-", actor, blocked=False, handler="external",
            reason=str({k: v for k, v in f.items() if v is not None}))
@@ -312,29 +312,29 @@ def put_policy(body: PolicyIn, actor: str = "external-agent"):
 @policy_router.post("/preset/{name}")
 def apply_preset(name: str, actor: str = "external-agent"):
     if name not in PRESETS:
-        raise HTTPException(404, "未知预设（strict / balanced / lenient）")
+        raise HTTPException(404, "unknown preset (strict / balanced / lenient)")
     pol = policy_store.update(PRESETS[name], actor)
     _audit(f"preset:{name}", "-", actor, blocked=False, handler="external")
     return pol
 
 
 # ---------------------------------------------------------------------------
-# 策略优化：批量原子调整 + 命中遥测 + 建议
+# Policy optimization: atomic batch adjustments + hit telemetry + suggestions
 # ---------------------------------------------------------------------------
 _rstore = RuleStore()
 
 
 class OptimizeIn(BaseModel):
-    rules: List[Dict[str, Any]] = []      # 整条规则 upsert（新增/修改）
-    enable: List[str] = []                # 要启用的规则 id
-    disable: List[str] = []               # 要禁用的规则 id
+    rules: List[Dict[str, Any]] = []      # full-rule upsert (create/update)
+    enable: List[str] = []                # rule ids to enable
+    disable: List[str] = []               # rule ids to disable
     policy: Optional[Dict[str, Any]] = None
     dry_run: bool = False
 
 
 @policy_router.post("/optimize")
 def optimize(body: OptimizeIn, actor: str = "external-agent"):
-    """批量原子调整：先全量预校验，任一失败则整批放弃；dry_run 只预览不写。"""
+    """Atomic batch adjustment: validate everything up front, abort the whole batch if any check fails; dry_run only previews without writing."""
     errors: List[Dict[str, Any]] = []
     for r in body.rules:
         try:
@@ -346,12 +346,12 @@ def optimize(body: OptimizeIn, actor: str = "external-agent"):
             errors.append({"id": r.get("id"), "error": str(e)})
     for rid in body.enable + body.disable:
         if not _rstore.get(rid):
-            errors.append({"id": rid, "error": "规则不存在"})
+            errors.append({"id": rid, "error": "rule does not exist"})
     if body.policy:
         for k in ("block_threshold", "suspicious_threshold"):
             v = body.policy.get(k)
             if v is not None and not (0 <= v <= 100):
-                errors.append({"policy": k, "error": "必须 0-100"})
+                errors.append({"policy": k, "error": "must be 0-100"})
     if errors:
         raise HTTPException(400, {"applied": False, "errors": errors})
 
@@ -360,7 +360,7 @@ def optimize(body: OptimizeIn, actor: str = "external-agent"):
             "rules": [r.get("id") for r in body.rules],
             "enable": body.enable, "disable": body.disable, "policy": body.policy}}
 
-    # 预校验通过 → 依次应用
+    # pre-validation passed -> apply in order
     for r in body.rules:
         _rstore.upsert(r, actor=actor, require_tests=True)
     for rid in body.enable:
@@ -379,7 +379,7 @@ def optimize(body: OptimizeIn, actor: str = "external-agent"):
 
 @policy_router.get("/stats")
 def rule_stats():
-    """各规则命中次数（含从未命中的启用规则），给反馈优化用。"""
+    """Per-rule hit counts (including enabled rules that never fired), for feedback-driven optimization."""
     hits = rule_engine.stats()
     rows = [{"id": r["id"], "name": r["name"], "category": r["category"],
              "enabled": r["enabled"], "hits": hits.get(r["name"], 0)}
@@ -390,7 +390,7 @@ def rule_stats():
 
 @policy_router.post("/optimize/suggest")
 def suggest():
-    """基于命中遥测给启发式建议：从未命中的启用规则、命中量 Top。"""
+    """Heuristic suggestions based on hit telemetry: enabled rules that never fired, and the top hitters."""
     hits = rule_engine.stats()
     rules = _rstore.list()
     never = [r["id"] for r in rules if r["enabled"] and hits.get(r["name"], 0) == 0]
@@ -398,7 +398,7 @@ def suggest():
                  reverse=True)[:5]
     return {
         "never_fired_enabled": never,
-        "hint_never": "启用但从未命中：可复核是否过时或可禁用以降开销",
+        "hint_never": "Enabled but never fired: review whether they are stale or can be disabled to reduce overhead",
         "top_firing": [{"id": i, "hits": h} for h, i in top if h > 0],
-        "hint_top": "命中量最高：若伴随大量放行流量，可能是误报来源，复核 patterns/阈值",
+        "hint_top": "Highest hit count: if accompanied by a lot of allowed traffic, may be a false-positive source; review patterns/thresholds",
     }

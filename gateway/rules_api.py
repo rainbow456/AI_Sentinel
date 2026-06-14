@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-规则管理 API / Rule management API
-=================================
-给外部安全分析 agent 查询与修改检测规则。所有写操作经校验 + 自带测试门禁，
-版本自增并留历史，且把改动审计上报 Splunk（module=rule_admin, handler=external）。
+Rule management API
+===================
+Lets external security-analysis agents query and modify detection rules. All
+write operations pass validation + a built-in test gate, increment the version
+and keep history, and audit the change to Splunk (module=rule_admin, handler=external).
 """
 
 # Load .env before reading env vars at module scope
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -38,7 +39,7 @@ _BG: set = set()
 
 
 def _audit(actor: str, action: str, rule_id: str, detail: str = ""):
-    """把规则改动作为一条 rule_admin 事件异步上报 Splunk。"""
+    """Report the rule change to Splunk asynchronously as a rule_admin event."""
     ev = SecurityEvent(
         module="rule_admin", blocked=False, handler="external", risk_score=0,
         user_input=f"{action} {rule_id} {detail}".strip(),
@@ -72,7 +73,7 @@ class TestIn(BaseModel):
     samples: List[str] = Field(default_factory=list)
 
 
-# ---- 查询 ----
+# ---- query ----
 @router.get("")
 def list_rules(category: Optional[str] = None, enabled: Optional[bool] = None,
                tag: Optional[str] = None, q: Optional[str] = None):
@@ -83,11 +84,11 @@ def list_rules(category: Optional[str] = None, enabled: Optional[bool] = None,
 def get_rule(rid: str):
     r = store.get(rid)
     if not r:
-        raise HTTPException(404, "规则不存在")
+        raise HTTPException(404, "rule does not exist")
     return r
 
 
-# ---- 校验（dry-run，不写库）----
+# ---- validate (dry-run, no DB write) ----
 @router.post("/validate")
 def validate_rule(rule: RuleIn):
     data = rule.model_dump()
@@ -98,7 +99,7 @@ def validate_rule(rule: RuleIn):
     return {"valid": True, "error": None, "test": store.run_tests(data)}
 
 
-# ---- 新增 / 修改 ----
+# ---- create / update ----
 @router.post("")
 def create_rule(rule: RuleIn, actor: str = "external-agent"):
     try:
@@ -123,7 +124,7 @@ def update_rule(rid: str, rule: RuleIn, actor: str = "external-agent"):
     return saved
 
 
-# ---- 启停 ----
+# ---- enable / disable ----
 @router.patch("/{rid}/enable")
 def enable_rule(rid: str, actor: str = "external-agent"):
     try:
@@ -146,29 +147,29 @@ def disable_rule(rid: str, actor: str = "external-agent"):
     return r
 
 
-# ---- 删除 ----
+# ---- delete ----
 @router.delete("/{rid}")
 def delete_rule(rid: str, actor: str = "external-agent"):
     if not store.delete(rid, actor):
-        raise HTTPException(404, "规则不存在")
+        raise HTTPException(404, "rule does not exist")
     rule_engine.reload()
     _audit(actor, "delete", rid)
     return {"deleted": rid}
 
 
-# ---- 对某规则试跑样本 ----
+# ---- run sample tests against a rule ----
 @router.post("/{rid}/test")
 def test_rule(rid: str, body: TestIn):
     r = store.get(rid)
     if not r:
-        raise HTTPException(404, "规则不存在")
+        raise HTTPException(404, "rule does not exist")
     import re
     pats = [re.compile(p, re.I) for p in r.get("patterns", [])]
     results = [{"sample": s, "matched": any(p.search(s) for p in pats)} for s in body.samples]
     return {"rule": rid, "results": results, "self_test": store.run_tests(r)}
 
 
-# ---- 版本 / 回滚 ----
+# ---- versions / rollback ----
 @router.get("/{rid}/versions")
 def rule_versions(rid: str):
     return {"id": rid, "versions": store.versions(rid)}
@@ -185,7 +186,7 @@ def rollback_rule(rid: str, version: int, actor: str = "external-agent"):
     return r
 
 
-# ---- 热加载 ----
+# ---- hot reload ----
 @router.post("/reload")
 def reload_engine():
     n = rule_engine.reload()

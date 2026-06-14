@@ -1,53 +1,62 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
- crm_secure.py —— 给 CRM-Agent 接入 AI_Sentinel 安全网关的「外挂」启动器
+ crm_secure.py — "Bolt-on" launcher that wires CRM-Agent into the AI_Sentinel gateway
 ================================================================================
 
-设计目标：**不改动 crm_agent.py 一行代码**，在它外面包一层安全守卫。
+Design goal: **wrap a security guard around crm_agent.py without changing a
+single line of its code.**
 
-原理：
-  crm_agent.py 的业务执行都汇聚到 CRMAgent.process(raw) 这一个方法，且 CLI 与
-  Web 两端都走它。本脚本用 monkey-patch 把 process 包裹起来，在调用原逻辑前后
-  插入两层守卫，再启动原版的 CLI / Web。由于 patch 打在「类方法」上，run_web()
-  内部新建的 CRMAgent 实例同样生效。
+How it works:
+  All of crm_agent.py's business execution funnels through the single method
+  CRMAgent.process(raw), and both the CLI and Web frontends go through it. This
+  script uses monkey-patching to wrap process(), inserting two guard layers
+  around the original logic before launching the original CLI / Web. Because the
+  patch is applied to the *class method*, CRMAgent instances created inside
+  run_web() are guarded too.
 
-两层守卫（对应网关两个入口）：
-  1) 输入守卫  POST /chat           —— 命令进入解析前做注入/越狱/PII 检测，403 即拦截
-  2) 动作守卫  POST /confirm-action —— 删除等高危操作执行前确认，allowed=false 即阻断
+Two guard layers (matching the gateway's two entry points):
+  1) Input guard   POST /chat           — runs injection/jailbreak/PII detection
+                                           before parsing; a 403 means blocked.
+  2) Action guard  POST /confirm-action — confirms high-risk operations (e.g.
+                                           deletes) before execution; allowed=false blocks.
 
-策略（按既定决策）：
-  - 删除类用「中性动作名」remove_record 上报，绕开网关对 delete/drop 的关键词硬阻断；
-    正常删除放行，仅当原始输入含注入/恶意上下文时被检测器拦下。
-  - 网关不可达时 **fail-open**：放行并打印一条告警，保证 CRM 可用。
-  - 仅用标准库 urllib，零新增依赖。
+Policy (per design decisions):
+  - Delete operations are reported under the neutral action name remove_record,
+    to sidestep the gateway's hard keyword block on delete/drop; normal deletes
+    pass, and are only caught when the raw input contains injection/malicious context.
+  - When the gateway is unreachable: **fail-open** — pass through and print a
+    warning so the CRM stays usable.
+  - Standard library urllib only; zero extra dependencies.
 
-【运行方式】（与 crm_agent.py 完全一致，只是换成本脚本启动）
-    命令行模式：python crm_secure.py
-    网页模式：  python crm_secure.py web          （默认 http://127.0.0.1:6001）
-                python crm_secure.py web 8080     （自定义端口）
+[Usage] (identical to crm_agent.py, just launched via this script)
+    CLI mode:  python crm_secure.py
+    Web mode:  python crm_secure.py web          (default http://127.0.0.1:6001)
+               python crm_secure.py web 8080     (custom port)
 
-【前置】先启动安全网关（默认 http://localhost:3001）：
+[Prerequisite] Start the security gateway first (default http://localhost:3001):
     cd d:/hackathon/AI_Sentinel
     python -m gateway.main
 
-【环境变量】
-    SENTINEL_ENABLED  默认 "1"；设 "0" 则本脚本退化为直接启动原版（不做检测）
-    GATEWAY_URL       默认 "http://localhost:3001"
-    AGENT_ID          默认 "crm-agent-01"
+[Environment variables]
+    SENTINEL_ENABLED  default "1"; set to "0" to fall back to launching the
+                      original version directly (no detection)
+    GATEWAY_URL       default "http://localhost:3001"
+    AGENT_ID          default "crm-agent-01"
 ================================================================================
 """
 
 # Load .env before reading any env vars (must be before crm_agent import)
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
 import os
 import sys
 import json
+import time
 import urllib.request
 import urllib.error
 
@@ -59,18 +68,25 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-import crm_agent  # 原版 Agent，导入不会触发其主程序（受 __main__ 保护）
+import crm_agent  # original Agent; importing does not trigger its main program (guarded by __main__)
 
 
 # ------------------------------------------------------------------------------
-# 配置（环境变量，带默认值）
+# Configuration (environment variables, with defaults)
 # ------------------------------------------------------------------------------
 SENTINEL_ENABLED = os.getenv("SENTINEL_ENABLED", "1") not in ("0", "false", "False", "")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:3001").rstrip("/")
 AGENT_ID = os.getenv("AGENT_ID", "crm-agent-01")
 
-# 需要走「动作守卫」的高危 intent → 实体类型映射。
-# 用中性动作名 remove_record 上报，避免命中网关英文硬阻断词（delete/drop/...）。
+# Held (gray-zone) wait: after the gateway holds a suspicious request, this agent
+# polls and waits for the analyst + human adjudication. It **never executes**
+# before a verdict; on wait timeout it stays "not released" = keeps blocking (no execution).
+HOLD_WAIT_S = float(os.getenv("SENTINEL_HOLD_WAIT_S", "90"))   # max wait in seconds
+HOLD_POLL_S = float(os.getenv("SENTINEL_HOLD_POLL_S", "2"))    # poll interval in seconds
+
+# High-risk intent -> entity-type mapping that must go through the "action guard".
+# Reported under the neutral action name remove_record to avoid hitting the
+# gateway's English hard-block words (delete/drop/...).
 HIGH_RISK_ACTIONS = {
     "delete_customer": "customer",
     "delete_contact": "contact",
@@ -78,12 +94,15 @@ HIGH_RISK_ACTIONS = {
     "delete_task": "task",
 }
 
-# 输入守卫的「拦截类别」白名单：只有这些检测器命中才真正拦截。
-# 原因：网关的 sensitive/pii_leak 会把电话、邮箱、身份证当作敏感信息，
-# 而 CRM 录入这些字段是核心合法操作（用户在管理自己的数据，不是外泄）。
-# 因此默认只拦「提示词注入 / 越狱」类；PII/敏感类在输入方向放行（记一条提示）。
-# 可用环境变量覆盖，例如 SENTINEL_BLOCK_DETECTORS="injection,prompt_injection,sensitive,pii_leak"
-# 收紧为「全部拦截」。
+# Allowlist of detector categories that actually block on the input guard: only
+# these detectors, when hit, truly block.
+# Rationale: the gateway's sensitive/pii_leak treats phone numbers, emails, ID
+# numbers as sensitive info, but entering these fields is a core legitimate CRM
+# operation (the user is managing their own data, not leaking it).
+# So by default we only block prompt-injection / jailbreak categories; PII/sensitive
+# categories are allowed on the input path (with a logged notice).
+# Override via env var, e.g. SENTINEL_BLOCK_DETECTORS="injection,prompt_injection,sensitive,pii_leak"
+# to tighten to "block everything".
 BLOCK_DETECTORS = set(
     d.strip() for d in
     os.getenv("SENTINEL_BLOCK_DETECTORS", "injection,prompt_injection").split(",")
@@ -92,22 +111,23 @@ BLOCK_DETECTORS = set(
 
 
 # ==============================================================================
-# 安全网关客户端（标准库 urllib 实现）
+# Security gateway client (implemented with the standard-library urllib)
 # ==============================================================================
 class SentinelClient:
-    """封装对 AI_Sentinel 两个入口的调用；所有网络异常一律 fail-open。"""
+    """Wraps calls to AI_Sentinel's two entry points; all network errors fail-open."""
 
     def __init__(self, base_url=GATEWAY_URL, agent_id=AGENT_ID, timeout=5.0):
-        """记录网关地址、Agent 标识与超时。"""
+        """Record the gateway address, agent identifier, and timeout."""
         self.base_url = base_url
         self.agent_id = agent_id
         self.timeout = timeout
 
     def _post(self, path, payload):
         """
-        POST JSON 到网关，返回 (status_code, body_dict)。
-        注意：urllib 对 4xx/5xx 会抛 HTTPError，这里把 403 等当作正常返回处理，
-        真正的连接失败（URLError/OSError）由调用方按 fail-open 兜底。
+        POST JSON to the gateway, returning (status_code, body_dict).
+        Note: urllib raises HTTPError on 4xx/5xx, so here we treat 403 etc. as a
+        normal return; genuine connection failures (URLError/OSError) are handled
+        by the caller's fail-open fallback.
         """
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
@@ -118,33 +138,49 @@ class SentinelClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # 403 等：仍带 JSON 主体，读出来交给调用方判定
+            # 403 etc.: still carries a JSON body, read it and let the caller decide
             try:
                 body = json.loads(e.read().decode("utf-8"))
             except Exception:
                 body = {}
             return e.code, body
 
+    def _get(self, path):
+        """GET JSON, returning (status_code, body_dict)."""
+        req = urllib.request.Request(f"{self.base_url}{path}")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read().decode("utf-8"))
+            except Exception:
+                return e.code, {}
+
     def check_input(self, prompt):
         """
-        输入守卫。返回 (ok, info)：
-          ok=False  -> 被拦截，info 为命中详情（detail）
-          ok=True   -> 放行；若 info 含 'warn' 说明网关不可达走了 fail-open
+        Input guard. Returns (verdict, info), verdict in {"allow","held","block"}:
+          block -> hard-blocked; info holds the hit details (detail)
+          held  -> gray-zone hold; info contains hold_id (must await analyst + human adjudication)
+          allow -> passed; info may contain 'warn' indicating the gateway was unreachable (fail-open)
         """
         try:
             status, body = self._post("/chat", {"prompt": prompt, "session_id": self.agent_id})
         except (urllib.error.URLError, OSError) as e:
-            return True, {"warn": f"安全网关不可达，已放行（fail-open）：{e}"}
+            return "allow", {"warn": f"Security gateway unreachable; passing through (fail-open): {e}"}
         if status == 403:
-            return False, body.get("detail", {})
+            return "block", body.get("detail", {})
+        if status == 202 and body.get("held"):
+            return "held", body
         if status != 200:
-            return True, {"warn": f"安全网关返回异常状态 {status}，已放行（fail-open）"}
-        return True, {}
+            return "allow", {"warn": f"Security gateway returned unexpected status {status}; passing through (fail-open)"}
+        return "allow", {}
 
     def confirm_action(self, action_name, action_params, user_input):
         """
-        动作守卫。返回 (allowed, reason)。
-        网关不可达 -> fail-open，allowed=True。
+        Action guard. Returns (verdict, info), verdict in {"allow","held","block"}:
+          when held, info is the response body (with hold_id); otherwise info is a reason string.
+        Gateway unreachable -> fail-open, allow.
         """
         payload = {
             "action_name": action_name,
@@ -155,13 +191,34 @@ class SentinelClient:
         try:
             status, body = self._post("/confirm-action", payload)
         except (urllib.error.URLError, OSError) as e:
-            return True, f"安全网关不可达，已放行（fail-open）：{e}"
+            return "allow", f"Security gateway unreachable; passing through (fail-open): {e}"
         if status != 200:
-            return True, f"安全网关返回异常状态 {status}，已放行（fail-open）"
-        return bool(body.get("allowed", False)), body.get("reason", "")
+            return "allow", f"Security gateway returned unexpected status {status}; passing through (fail-open)"
+        if body.get("held"):
+            return "held", body
+        return ("allow" if body.get("allowed") else "block"), body.get("reason", "")
+
+    def wait_for_hold(self, hold_id):
+        """
+        Poll the held adjudication; returns 'release' | 'block' | 'timeout'.
+        Gateway becomes unreachable mid-poll -> returns 'timeout' (fail-safe: stays unexecuted).
+        """
+        deadline = time.time() + HOLD_WAIT_S
+        while time.time() < deadline:
+            try:
+                _status, body = self._get(f"/hold/{hold_id}")
+            except (urllib.error.URLError, OSError):
+                return "timeout"
+            st = (body or {}).get("status")
+            if st == "released":
+                return "release"
+            if st == "blocked":
+                return "block"
+            time.sleep(HOLD_POLL_S)
+        return "timeout"
 
     def health(self):
-        """健康检查；返回 detector_count 或 None（不可达）。"""
+        """Health check; returns detector_count or None (unreachable)."""
         try:
             req = urllib.request.Request(f"{self.base_url}/health")
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -170,59 +227,99 @@ class SentinelClient:
             return None
 
 
-# 全局单例，供被 patch 的 process 引用
+# Global singleton, referenced by the patched process
 SENTINEL = SentinelClient()
 
 
 # ==============================================================================
-# monkey-patch：在 CRMAgent.process 外面包两层守卫
+# monkey-patch: wrap two guard layers around CRMAgent.process
 # ==============================================================================
-_ORIGINAL_PROCESS = crm_agent.CRMAgent.process  # 保存原方法引用
+_ORIGINAL_PROCESS = crm_agent.CRMAgent.process  # keep a reference to the original method
+
+
+def _resolve_held(self, layer, info):
+    """
+    Handle a "gray-zone hold (held)": **never execute** before the analyst + human
+    adjudication arrives.
+    Return values:
+      - None             -> verdict is release (pass); caller continues with the original logic
+      - list of blocks    -> verdict is block / timed out without release / missing hold_id;
+                             short-circuit return (no execution)
+    """
+    hold_id = info.get("hold_id") if isinstance(info, dict) else None
+    if not hold_id:
+        # Without a hold_id we can't track the verdict -> fail-safe: do not execute
+        return [self._err("Operation held by the security gateway, but no disposition handle was provided; not executing for now.")]
+    rule = (info.get("detail") or {}).get("rule_hit") if isinstance(info, dict) else None
+    print(f"{layer} hit the gray zone; held, awaiting security analyst disposition (hold={hold_id}"
+          f"{f', rule={rule}' if rule else ''}, up to {HOLD_WAIT_S:.0f}s)...")
+    decision = SENTINEL.wait_for_hold(hold_id)
+    if decision == "release":
+        print(f"Security disposition: released (hold={hold_id})")
+        return None
+    if decision == "block":
+        return [self._err("Security disposition: this operation was adjudicated as blocked (block); not executed.")]
+    # timeout: stays held = keeps blocking, still not executed
+    return [self._err("Operation is still under security review and has not been released; not executing for now (held). "
+                      "Please retry later or contact a security analyst for disposition.")]
 
 
 def guarded_process(self, raw):
     """
-    包装版 process：先过安全网关，再调用原版业务逻辑。
-    复用 self._err / self._info 等原版结果块构造器，保证 CLI / Web 渲染一致。
+    Wrapped process: pass through the security gateway first, then call the original
+    business logic. Reuses the original self._err / self._info result-block builders
+    so CLI / Web rendering stays consistent.
+    Three-state verdict: allow -> pass / block -> reject / held -> hold (await analyst +
+    human; no execution in the meantime).
     """
     raw = (raw or "").strip()
     if not raw:
         return _ORIGINAL_PROCESS(self, raw)
 
-    prefix_blocks = []  # fail-open 告警等附加提示，拼在正常结果前面
+    prefix_blocks = []  # extra notices (fail-open warnings etc.) prepended to the normal result
 
-    # ── 第 1 层：输入守卫 ──
-    ok, info = SENTINEL.check_input(raw)
-    if not ok:
-        # 网关判定命中；再按「拦截类别」决定是否真的拦
+    # -- Layer 1: input guard --
+    verdict, info = SENTINEL.check_input(raw)
+    if verdict == "block":
+        # Gateway flagged a hit; then decide whether to truly block by "block category"
         detector = info.get("detector") or ""
         rule = info.get("rule_hit") or detector or "unknown"
         desc = (info.get("details") or {}).get("rule_description") \
             or info.get("reason") or ""
         if detector in BLOCK_DETECTORS:
-            return [self._err(f"⛔ 输入被安全网关拦截：{rule}"
-                              + (f" — {desc}" if desc else ""))]
-        # PII/敏感类：CRM 录入合法字段，放行但留痕提示
+            return [self._err(f"Input blocked by the security gateway: {rule}"
+                              + (f" - {desc}" if desc else ""))]
+        # PII/sensitive category: CRM is entering legitimate fields; pass but leave a trace notice
         prefix_blocks.append(self._info(
-            f"🔐 网关提示：输入含敏感字段（{rule}），按 CRM 策略放行。"))
-    elif info.get("warn"):
-        prefix_blocks.append(self._info("⚠️ " + info["warn"]))
+            f"Gateway notice: input contains a sensitive field ({rule}); passed per CRM policy."))
+    elif verdict == "held":
+        held_result = _resolve_held(self, "Input", info)
+        if held_result is not None:
+            return held_result  # block / timeout -> do not execute
+        # release -> continue
+    elif isinstance(info, dict) and info.get("warn"):
+        prefix_blocks.append(self._info("WARNING: " + info["warn"]))
 
-    # ── 第 2 层：动作守卫（仅高危删除类）──
+    # -- Layer 2: action guard (high-risk delete operations only) --
     intent = self.parser.parse(raw)
     action = intent.get("action")
     if action in HIGH_RISK_ACTIONS:
         params = {"entity": HIGH_RISK_ACTIONS[action], "id": intent.get("id")}
-        allowed, reason = SENTINEL.confirm_action("remove_record", params, raw)
-        if not allowed:
-            return [self._err(f"⛔ 高危操作被安全网关阻断：{reason or '违反安全策略'}")]
+        averdict, ainfo = SENTINEL.confirm_action("remove_record", params, raw)
+        if averdict == "block":
+            reason = ainfo if isinstance(ainfo, str) else (ainfo.get("reason") or "violates security policy")
+            return [self._err(f"High-risk operation blocked by the security gateway: {reason}")]
+        elif averdict == "held":
+            held_result = _resolve_held(self, "High-risk action", ainfo)
+            if held_result is not None:
+                return held_result
 
-    # ── 通过守卫，执行原版逻辑 ──
+    # -- Passed the guards; run the original logic --
     return prefix_blocks + _ORIGINAL_PROCESS(self, raw)
 
 
 def install_guard():
-    """把守卫装到 CRMAgent 类上；返回是否成功启用。"""
+    """Install the guard onto the CRMAgent class; return whether it was enabled."""
     if not SENTINEL_ENABLED:
         return False
     crm_agent.CRMAgent.process = guarded_process
@@ -230,23 +327,23 @@ def install_guard():
 
 
 # ==============================================================================
-# 入口：装好守卫后，复用原版的 CLI / Web 启动
+# Entry point: after installing the guard, reuse the original CLI / Web launch
 # ==============================================================================
 def _banner(enabled):
-    """打印安全状态横幅。"""
+    """Print the security status banner."""
     print("=" * 64)
     if not enabled:
-        print(" 🔓  安全守卫已禁用（SENTINEL_ENABLED=0）—— 以原版模式运行")
+        print(" Security guard disabled (SENTINEL_ENABLED=0) - running in original mode")
         print("=" * 64)
         return
     count = SENTINEL.health()
-    status = (f"在线，{count} 个检测器" if count is not None
-              else "不可达（将 fail-open 放行 + 告警）")
-    print(" 🛡️  CRM-Agent 安全模式 —— 已接入 AI_Sentinel")
-    print(f"     网关：{GATEWAY_URL}  状态：{status}")
-    print(f"     Agent 标识：{AGENT_ID}")
-    print(f"     拦截类别：{', '.join(sorted(BLOCK_DETECTORS)) or '(无)'}"
-          "  （PII/敏感类在输入方向放行）")
+    status = (f"online, {count} detectors" if count is not None
+              else "unreachable (will fail-open + warn)")
+    print(" CRM-Agent secure mode - wired into AI_Sentinel")
+    print(f"     Gateway: {GATEWAY_URL}  Status: {status}")
+    print(f"     Agent ID: {AGENT_ID}")
+    print(f"     Block categories: {', '.join(sorted(BLOCK_DETECTORS)) or '(none)'}"
+          "  (PII/sensitive categories are allowed on the input path)")
     print("=" * 64)
 
 

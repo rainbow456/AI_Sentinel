@@ -1,48 +1,49 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
- CRM-Agent —— 轻量级自然语言客户关系管理助手
+ CRM-Agent — lightweight natural-language CRM assistant
 ================================================================================
 
-参考 Salesforce Agentforce 的核心交互模式：完全基于自然语言对话。
-用户在命令行输入中文指令，Agent 解析意图并操作本地数据。
+Modeled on Salesforce Agentforce's core interaction pattern: fully conversational,
+natural-language driven. The user types English commands on the command line, and
+the Agent parses the intent and operates on local data.
 
-【运行方式】
-    命令行模式：python crm_agent.py
-    网页模式：  python crm_agent.py web        （默认 http://127.0.0.1:6001）
-                python crm_agent.py web 8080   （自定义端口）
+[Usage]
+    CLI mode:  python crm_agent.py
+    Web mode:  python crm_agent.py web        (default http://127.0.0.1:6001)
+               python crm_agent.py web 8080   (custom port)
 
-两种模式共用同一套数据与业务逻辑。启动后会在脚本所在目录自动创建
-SQLite 数据库文件 crm.db（已存在则复用）。
+Both modes share the same data and business logic. On startup, a SQLite database
+file crm.db is created automatically in the script's directory (reused if it already exists).
 
-【依赖】
-    仅标准库（sqlite3 / re / datetime 等）。
-    可选：prettytable（pip install prettytable）——用于美化表格；
-          未安装时自动降级为内置字符串对齐输出，功能不受影响。
+[Dependencies]
+    Standard library only (sqlite3 / re / datetime, etc.).
+    Optional: prettytable (pip install prettytable) — used to prettify tables;
+              when not installed, falls back to built-in string alignment with no loss of function.
 
-【支持的命令示例】（输入 help 可随时查看）
-    客户：  添加客户 张三 北京XX科技 13800000000 zhang@x.com 北京朝阳
-            显示所有客户 / 查找客户 张三 / 修改客户3的电话为139xxxx / 删除客户 3
-    联系人：添加联系人 李四 客户ID=1 职位销售经理 电话138xxxx 邮箱li@x.com
-            显示所有联系人 / 客户1的联系人 / 删除联系人 2
-    机会：  创建机会 年度采购 客户ID=1 金额50000
-            将机会3推进到谈判 / 修改机会5金额为80000 / 关闭机会2 赢单 价格合适
-            显示所有机会
-    任务：  添加任务 客户1 回访客户 截止2026-06-10
-            显示未完成任务 / 完成任务8 / 机会3的任务
-    其他：  显示概览 / help / exit
+[Example commands] (type help to view at any time)
+    Customers: add customer Acme Acme Corp 13800000000 zhang@x.com Beijing Chaoyang
+               show customers / find customer Acme / update customer 3 phone=139xxxx / delete customer 3
+    Contacts:  add contact John customer=1 title=Sales Manager phone=138xxxx email=li@x.com
+               show contacts / contacts of customer 1 / delete contact 2
+    Opportunities: create opportunity Annual Purchase customer=1 amount=50000
+               advance opportunity 3 to negotiation / update opportunity 5 amount=80000 / close opportunity 2 won good price
+               show opportunities
+    Tasks:     add task customer 1 follow up call due 2026-06-10
+               show open tasks / complete task 8 / tasks of opportunity 3
+    Other:     show dashboard / help / exit
 
-【代码组织】
-    DatabaseManager —— 所有 SQLite 读写
-    CommandParser   —— 自然语言意图解析（正则 + 关键词）
-    CRMAgent        —— 主循环、命令分发、业务逻辑、交互反馈
+[Code organization]
+    DatabaseManager — all SQLite reads/writes
+    CommandParser   — natural-language intent parsing (regex + keywords)
+    CRMAgent        — main loop, command dispatch, business logic, interactive feedback
 ================================================================================
 """
 
 # Load .env before reading any env vars
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -55,8 +56,9 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
-# Windows 控制台默认 GBK 编码，无法输出 emoji / 部分中文，统一切到 UTF-8。
-# Python 3.7+ 的标准流支持 reconfigure；失败则静默跳过（不影响核心功能）。
+# Windows consoles default to GBK encoding and cannot output emoji / some Chinese
+# characters, so switch everything to UTF-8.
+# Python 3.7+ standard streams support reconfigure; silently skip on failure (core functionality unaffected).
 for _stream in (sys.stdout, sys.stdin, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
@@ -64,92 +66,97 @@ for _stream in (sys.stdout, sys.stdin, sys.stderr):
         pass
 
 # ------------------------------------------------------------------------------
-# 可选依赖 prettytable：有则用，无则降级到内置对齐输出
+# Optional dependency prettytable: use it if available, otherwise fall back to built-in alignment
 # ------------------------------------------------------------------------------
 try:
     from prettytable import PrettyTable  # type: ignore
 
     _HAS_PRETTYTABLE = True
-except ImportError:  # 未安装时优雅降级，不影响功能
+except ImportError:  # graceful fallback when not installed; functionality unaffected
     _HAS_PRETTYTABLE = False
 
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crm.db")
 
-# 帮助文本（CLI 与 Web 共用）
-HELP_TEXT = """可用命令示例（支持同义词，自然语言即可）：
+# Help text (shared by CLI and Web)
+HELP_TEXT = """Example commands (synonyms supported; natural language is fine):
 
-【客户】
-  添加客户 张三 北京XX科技 13800000000 zhang@x.com 北京朝阳区
-  显示所有客户
-  查找客户 张三            （也可按电话：查找客户 13800000000）
-  修改客户3的电话为13911112222
-  删除客户 3               （需二次确认）
+[Customers]
+  add customer Acme Acme Corp 13800000000 zhang@x.com Beijing Chaoyang
+  show customers
+  find customer Acme            (also searchable by phone: find customer 13800000000)
+  update customer 3 phone=13911112222
+  delete customer 3             (requires confirmation)
 
-【联系人】
-  添加联系人 李四 客户ID=1 职位销售经理 电话13800000000 邮箱li@x.com
-  显示所有联系人
-  客户1的联系人
-  修改联系人2的邮箱为new@x.com
-  删除联系人 2
+[Contacts]
+  add contact John customer=1 title=Sales Manager phone=13800000000 email=li@x.com
+  show contacts
+  contacts of customer 1
+  update contact 2 email=new@x.com
+  delete contact 2
 
-【销售机会】
-  创建机会 年度采购项目 客户ID=1 金额50000
-  将机会3推进到谈判        （阶段：初步接触/需求分析/方案报价/谈判/赢单/输单）
-  修改机会5金额为80000
-  修改机会3的关闭日期为2026-07-01
-  显示所有机会            （按阶段分组）
-  关闭机会2 赢单 价格合适
+[Opportunities]
+  create opportunity Annual Purchase customer=1 amount=50000
+  advance opportunity 3 to negotiation     (stages: Lead/Qualified/Proposal/Negotiation/Won/Lost)
+  update opportunity 5 amount=80000
+  update opportunity 3 date=2026-07-01
+  show opportunities            (grouped by stage)
+  close opportunity 2 won good price
 
-【任务/跟进】
-  添加任务 客户1 回访客户确认需求 截止2026-06-10
-  添加任务 机会3 准备投标方案 2026-06-01
-  显示未完成任务
-  完成任务8
-  机会3的任务
+[Tasks / Follow-ups]
+  add task customer 1 follow up to confirm needs due 2026-06-10
+  add task opportunity 3 prepare bid proposal 2026-06-01
+  show open tasks
+  complete task 8
+  tasks of opportunity 3
 
-【其他】
-  显示概览 / 帮助(help) / 退出(exit)"""
+[Other]
+  show dashboard / help / exit"""
 
-# 机会阶段：内部存储值 -> 中文展示名
+# Opportunity stages: internal stored value -> English display name
 STAGE_LABELS = {
-    "initial_contact": "初步接触",
-    "needs_analysis": "需求分析",
-    "proposal": "方案报价",
-    "negotiation": "谈判",
-    "won": "赢单",
-    "lost": "输单",
+    "initial_contact": "Lead",
+    "needs_analysis": "Qualified",
+    "proposal": "Proposal",
+    "negotiation": "Negotiation",
+    "won": "Won",
+    "lost": "Lost",
 }
-# 中文 -> 内部值（用于解析用户输入的阶段名）
+# Display name -> internal value (used to parse stage names from user input)
 STAGE_FROM_LABEL = {v: k for k, v in STAGE_LABELS.items()}
-# 阶段同义词，便于自然语言匹配
+# Stage synonyms (lowercase), to ease natural-language matching
 STAGE_ALIASES = {
-    "初步接触": "initial_contact",
-    "接触": "initial_contact",
-    "需求分析": "needs_analysis",
-    "需求": "needs_analysis",
-    "方案报价": "proposal",
-    "报价": "proposal",
-    "方案": "proposal",
-    "谈判": "negotiation",
-    "赢单": "won",
-    "成交": "won",
-    "输单": "lost",
-    "丢单": "lost",
-    "失败": "lost",
+    "lead": "initial_contact",
+    "initial contact": "initial_contact",
+    "contact": "initial_contact",
+    "qualified": "needs_analysis",
+    "needs analysis": "needs_analysis",
+    "needs": "needs_analysis",
+    "proposal": "proposal",
+    "quote": "proposal",
+    "negotiation": "negotiation",
+    "negotiate": "negotiation",
+    "won": "won",
+    "win": "won",
+    "lost": "lost",
+    "lose": "lost",
+    "fail": "lost",
 }
 
 
 # ==============================================================================
-# AI_Sentinel 安全网关接入（内置守卫）
+# AI_Sentinel security gateway integration (built-in guard)
 # ==============================================================================
-# 每条命令先经网关检测，再进业务逻辑；网关因此能记录到每次输入。
-# 全部可用环境变量控制，不配也能跑（网关不可达时 fail-open 放行 + 告警）。
+# Every command is detected by the gateway first, then enters the business logic;
+# this lets the gateway log every input.
+# Fully controllable via environment variables, and runs even without config
+# (fail-open + warn when the gateway is unreachable).
 SENTINEL_ENABLED = os.getenv("SENTINEL_ENABLED", "1") not in ("0", "false", "False", "")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:3001").rstrip("/")
 AGENT_ID = os.getenv("AGENT_ID", "crm-agent-01")
 
-# 高危 intent → 实体类型；用中性动作名 remove_record 上报，避开网关英文硬阻断词。
+# High-risk intent -> entity type; reported under the neutral action name
+# remove_record to avoid the gateway's English hard-block words.
 HIGH_RISK_ACTIONS = {
     "delete_customer": "customer",
     "delete_contact": "contact",
@@ -157,10 +164,12 @@ HIGH_RISK_ACTIONS = {
     "delete_task": "task",
 }
 
-# 输入守卫的「真正拦截类别」：只有这些检测器命中才拒绝。
-# 网关的 sensitive/pii_leak 会把电话、邮箱当敏感信息，而 CRM 录入这些是合法操作，
-# 故默认只拦「提示词注入/越狱」类；PII/敏感类在输入方向放行（留痕提示）。
-# 可用 SENTINEL_BLOCK_DETECTORS="injection,prompt_injection,sensitive,pii_leak" 收紧。
+# Input guard's "truly blocking categories": only these detectors, when hit, reject.
+# The gateway's sensitive/pii_leak treats phone numbers and emails as sensitive
+# info, but entering these in a CRM is a legitimate operation, so by default we
+# only block the "prompt injection / jailbreak" categories; PII/sensitive
+# categories are allowed on the input path (with a logged notice).
+# Tighten with SENTINEL_BLOCK_DETECTORS="injection,prompt_injection,sensitive,pii_leak".
 BLOCK_DETECTORS = set(
     d.strip() for d in
     os.getenv("SENTINEL_BLOCK_DETECTORS", "injection,prompt_injection").split(",")
@@ -168,12 +177,15 @@ BLOCK_DETECTORS = set(
 )
 
 # ------------------------------------------------------------------------------
-# Skill 扩展：工作人员上传「声明式 skill」优化 agent
+# Skill extension: staff upload "declarative skills" to improve the agent
 # ------------------------------------------------------------------------------
-# skill = 一个 manifest JSON，声明新的自然语言触发词 -> 知识问答 / 映射到现有安全动作。
-# 不执行上传的任何代码；上传时强制经 AI_Sentinel /scan 扫描，benign 才装载。
+# A skill = a manifest JSON declaring new natural-language triggers -> knowledge
+# Q&A / mapping to existing safe actions.
+# None of the uploaded content is executed; uploads are forced through the
+# AI_Sentinel /scan check, and only benign ones are loaded.
 SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
-# 允许 skill 映射到的动作白名单：只放无参的只读/展示类，杜绝映射到增删改高危动作。
+# Allowlist of actions a skill may map to: only parameter-free read-only/display
+# actions, to prevent mapping to high-risk create/update/delete actions.
 SKILL_SAFE_ACTIONS = {
     "list_customers", "list_contacts", "list_opportunities",
     "list_tasks", "dashboard", "help",
@@ -181,16 +193,16 @@ SKILL_SAFE_ACTIONS = {
 
 
 class SentinelClient:
-    """AI_Sentinel 网关客户端：纯标准库 urllib，超时 5s，网关不可达时 fail-open。"""
+    """AI_Sentinel gateway client: pure standard-library urllib, 5s timeout, fail-open when the gateway is unreachable."""
 
     def __init__(self, base_url=GATEWAY_URL, agent_id=AGENT_ID, timeout=5.0):
-        """记录网关地址、Agent 标识与超时。"""
+        """Record the gateway address, agent identifier, and timeout."""
         self.base_url = base_url
         self.agent_id = agent_id
         self.timeout = timeout
 
     def _post(self, path, payload):
-        """POST JSON，返回 (status_code, dict)；网络异常返回 (None, {error})。"""
+        """POST JSON, returning (status_code, dict); on network error returns (None, {error})."""
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             self.base_url + path, data=data, method="POST",
@@ -200,7 +212,7 @@ class SentinelClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # 403 等带响应体的错误，读出 body 供判定
+            # Errors carrying a response body (403 etc.): read the body for adjudication
             try:
                 return e.code, json.loads(e.read().decode("utf-8"))
             except Exception:
@@ -210,22 +222,22 @@ class SentinelClient:
 
     def check_input(self, prompt):
         """
-        输入守卫（/chat）。
-        返回 (ok, info)：ok=True 放行；ok=False 表示网关 403 命中（info 含命中详情）。
-        网关不可达 → fail-open，ok=True 且 info={"warn": ...}。
+        Input guard (/chat).
+        Returns (ok, info): ok=True passes; ok=False means a gateway 403 hit (info holds the hit details).
+        Gateway unreachable -> fail-open, ok=True and info={"warn": ...}.
         """
         status, body = self._post("/chat", {"prompt": prompt, "session_id": self.agent_id})
         if status == 200:
             return True, {}
         if status == 403:
             return False, body.get("detail", {})
-        # 不可达或异常 → fail-open
-        return True, {"warn": f"安全网关不可达，已放行（fail-open）：{body.get('error', status)}"}
+        # Unreachable or error -> fail-open
+        return True, {"warn": f"Security gateway unreachable; passing through (fail-open): {body.get('error', status)}"}
 
     def confirm_action(self, action_name, action_params, user_input=""):
         """
-        动作守卫（/confirm-action）。返回 (allowed, reason)。
-        网关不可达 → fail-open，allowed=True。
+        Action guard (/confirm-action). Returns (allowed, reason).
+        Gateway unreachable -> fail-open, allowed=True.
         """
         status, body = self._post("/confirm-action", {
             "action_name": action_name,
@@ -235,19 +247,19 @@ class SentinelClient:
         })
         if status == 200:
             return body.get("allowed", False), body.get("reason", "")
-        return True, f"安全网关不可达，已放行（fail-open）：{body.get('error', status)}"
+        return True, f"Security gateway unreachable; passing through (fail-open): {body.get('error', status)}"
 
     def scan(self, skill_name, skill_content):
         """
-        Skill 安全扫描（/scan）。返回 (verdict, info)。
-        verdict ∈ benign / suspicious / malicious / unverified。
-        与输入守卫不同，skill 上传走 **fail-closed**：网关不可达 → unverified（不装载）。
+        Skill security scan (/scan). Returns (verdict, info).
+        verdict in benign / suspicious / malicious / unverified.
+        Unlike the input guard, skill uploads are **fail-closed**: gateway unreachable -> unverified (not loaded).
         """
         status, body = self._post("/scan", {
             "skill_name": skill_name, "skill_content": skill_content,
         })
         if status != 200:
-            return "unverified", {"reason": f"安全网关不可达（{body.get('error', status)}）"}
+            return "unverified", {"reason": f"Security gateway unreachable ({body.get('error', status)})"}
         risk = int(body.get("risk_score", 0))
         evidence = ""
         findings = body.get("findings") or []
@@ -255,7 +267,7 @@ class SentinelClient:
             top = findings[0]
             evidence = top.get("description") or top.get("rule_hit") or ""
             if top.get("matched_content"):
-                evidence += f"（{top['matched_content']}）"
+                evidence += f"({top['matched_content']})"
         if not body.get("is_malicious"):
             return "benign", {"risk_score": risk, "evidence": ""}
         verdict = "malicious" if risk >= 80 else "suspicious"
@@ -263,36 +275,38 @@ class SentinelClient:
 
 
 # ==============================================================================
-# Skill 管理：上传 -> 安全扫描 -> benign 装载 / 恶意可疑隔离
+# Skill management: upload -> security scan -> load if benign / quarantine if malicious or suspicious
 # ==============================================================================
 class SkillManager:
     """
-    声明式 skill 的装载与管理。
+    Loading and management of declarative skills.
 
-    一个 skill 是一份 manifest JSON：
-        {"name": "退款助手", "version": "1.0", "description": "...",
+    A skill is a manifest JSON:
+        {"name": "Refund Helper", "version": "1.0", "description": "...",
          "rules": [
-            {"triggers": ["退款", "怎么退款"], "respond": "退款流程：……"},
-            {"triggers": ["大客户", "vip"], "action": "list_customers"}
+            {"triggers": ["refund", "how to refund"], "respond": "Refund process: ..."},
+            {"triggers": ["big customer", "vip"], "action": "list_customers"}
          ]}
 
-    triggers 命中后，要么回一段知识文本（respond），要么映射到现有安全动作（action，
-    仅限 SKILL_SAFE_ACTIONS 白名单）。上传时先过网关 /scan，benign 才落盘装载。
+    When a trigger matches, the skill either returns a piece of knowledge text
+    (respond) or maps to an existing safe action (action, limited to the
+    SKILL_SAFE_ACTIONS allowlist). On upload it first passes through the gateway
+    /scan, and only benign ones are written to disk and loaded.
     """
 
     def __init__(self, sentinel, skills_dir=SKILLS_DIR):
-        """准备目录，加载已装载的 skill。"""
+        """Prepare directories and load already-installed skills."""
         self.sentinel = sentinel
         self.dir = skills_dir
         self.quarantine = os.path.join(skills_dir, "_quarantine")
         os.makedirs(self.dir, exist_ok=True)
         os.makedirs(self.quarantine, exist_ok=True)
-        self.rules = []   # 扁平化后的触发规则
-        self.loaded = []  # 已装载 skill 概要
+        self.rules = []   # flattened trigger rules
+        self.loaded = []  # summary of loaded skills
         self.reload()
 
     def reload(self):
-        """重新扫描 skills 目录，重建触发规则表。"""
+        """Re-scan the skills directory and rebuild the trigger-rule table."""
         self.rules = []
         self.loaded = []
         for fn in sorted(os.listdir(self.dir)):
@@ -305,7 +319,7 @@ class SkillManager:
                 continue
 
     def _register(self, data, fn):
-        """把一份 manifest 拆成触发规则，登记进表。返回登记的规则数。"""
+        """Split a manifest into trigger rules and register them. Returns the number of rules registered."""
         name = data.get("name") or fn[:-5]
         n = 0
         for r in (data.get("rules") or []):
@@ -315,7 +329,7 @@ class SkillManager:
             respond = r.get("respond")
             action = r.get("action")
             if action and action not in SKILL_SAFE_ACTIONS:
-                action = None  # 不允许映射到高危/带参动作
+                action = None  # disallow mapping to high-risk / parameterized actions
             if not respond and not action:
                 continue
             self.rules.append({"skill": name, "triggers": triggers,
@@ -327,58 +341,58 @@ class SkillManager:
 
     @staticmethod
     def _validate(content):
-        """校验 manifest 结构，返回 (data, err)。"""
+        """Validate the manifest structure, returning (data, err)."""
         try:
             data = json.loads(content)
         except Exception as e:
-            return None, f"不是合法 JSON：{e}"
+            return None, f"Not valid JSON: {e}"
         if not isinstance(data, dict):
-            return None, "manifest 顶层应为对象"
+            return None, "Manifest top level must be an object"
         if not str(data.get("name", "")).strip():
-            return None, "缺少 name 字段"
+            return None, "Missing 'name' field"
         rules = data.get("rules")
         if not isinstance(rules, list) or not rules:
-            return None, "缺少非空的 rules 列表"
+            return None, "Missing a non-empty 'rules' list"
         return data, None
 
     def submit(self, name, content):
         """
-        上传一个 skill。流程：扫描 -> 判定 -> benign 落盘装载 / 其余隔离。
-        返回 {ok, verdict, risk_score, evidence, message}。
+        Upload a skill. Flow: scan -> adjudicate -> if benign write to disk and load / otherwise quarantine.
+        Returns {ok, verdict, risk_score, evidence, message}.
         """
         safe = re.sub(r"[^\w\-]", "_", (name or "skill")).strip("_")[:40] or "skill"
 
-        # ① 安全闸门（fail-closed：网关不可达不装载）
+        # (1) Security gate (fail-closed: do not load if the gateway is unreachable)
         if self.sentinel:
             verdict, info = self.sentinel.scan(safe, content)
         else:
-            verdict, info = "unverified", {"reason": "安全网关未启用（SENTINEL_ENABLED=0）"}
+            verdict, info = "unverified", {"reason": "Security gateway not enabled (SENTINEL_ENABLED=0)"}
         risk = info.get("risk_score", 0)
         evidence = info.get("evidence", "") or info.get("reason", "")
 
         if verdict != "benign":
             self._quarantine(safe, content, verdict, evidence)
-            tip = {"unverified": "安全网关不可达，已挂起待复核",
-                   "suspicious": "扫描判定可疑，已隔离",
-                   "malicious": "扫描判定恶意，已拦截隔离"}.get(verdict, "未通过")
+            tip = {"unverified": "Security gateway unreachable; held pending review",
+                   "suspicious": "Scan flagged as suspicious; quarantined",
+                   "malicious": "Scan flagged as malicious; blocked and quarantined"}.get(verdict, "Not approved")
             return {"ok": False, "verdict": verdict, "risk_score": risk,
-                    "evidence": evidence, "message": f"{tip}，未装载。"}
+                    "evidence": evidence, "message": f"{tip}; not loaded."}
 
-        # ② benign：结构校验后落盘装载
+        # (2) benign: validate structure, then write to disk and load
         data, err = self._validate(content)
         if err:
             return {"ok": False, "verdict": "benign", "risk_score": risk,
-                    "evidence": "", "message": f"扫描通过但 manifest 无效：{err}"}
+                    "evidence": "", "message": f"Scan passed but manifest is invalid: {err}"}
         fn = safe + ".json"
         with open(os.path.join(self.dir, fn), "w", encoding="utf-8") as f:
             f.write(content)
         self.reload()
         active = next((s["rules"] for s in self.loaded if s["file"] == fn), 0)
         return {"ok": True, "verdict": "benign", "risk_score": risk, "evidence": "",
-                "message": f"扫描通过，已装载 skill「{data.get('name')}」（生效 {active} 条规则）。"}
+                "message": f"Scan passed; loaded skill \"{data.get('name')}\" ({active} rules now active)."}
 
     def _quarantine(self, name, content, verdict, evidence):
-        """把未通过的 skill 连同判定写入隔离区。"""
+        """Write the rejected skill, together with its verdict, into the quarantine area."""
         try:
             with open(os.path.join(self.quarantine, name + ".json"), "w", encoding="utf-8") as f:
                 f.write(content)
@@ -389,7 +403,7 @@ class SkillManager:
             pass
 
     def match(self, text):
-        """对未识别输入做触发匹配；命中返回规则，否则 None。"""
+        """Run trigger matching on unrecognized input; return the rule on a hit, otherwise None."""
         low = (text or "").lower()
         for r in self.rules:
             if any(t in low for t in r["triggers"]):
@@ -397,7 +411,7 @@ class SkillManager:
         return None
 
     def listing(self):
-        """返回 (已装载, 已隔离) 两个列表。"""
+        """Return the (loaded, quarantined) lists."""
         q = []
         for fn in sorted(os.listdir(self.quarantine)):
             if fn.endswith(".meta.json"):
@@ -410,30 +424,30 @@ class SkillManager:
 
 
 # ==============================================================================
-# 表格渲染工具：统一处理 prettytable / 降级两种情况
+# Table-rendering utility: uniformly handles both prettytable and the fallback case
 # ==============================================================================
 def render_table(headers, rows):
     """
-    将表头与数据行渲染为对齐的表格字符串。
+    Render headers and data rows into an aligned table string.
 
-    headers: list[str] 列标题
-    rows:    list[list] 每行的单元格值（任意类型，内部转为 str）
-    返回:    多行字符串；rows 为空时返回提示语。
+    headers: list[str] column titles
+    rows:    list[list] cell values per row (any type, converted to str internally)
+    returns: a multi-line string; returns a notice when rows is empty.
     """
     if not rows:
-        return "（没有匹配的记录）"
+        return "(no matching records)"
 
     str_rows = [[("" if c is None else str(c)) for c in row] for row in rows]
 
     if _HAS_PRETTYTABLE:
         table = PrettyTable()
         table.field_names = headers
-        table.align = "l"  # 左对齐，中文更易读
+        table.align = "l"  # left-align; easier to read for Chinese text
         for row in str_rows:
             table.add_row(row)
         return table.get_string()
 
-    # ---- 降级：手工计算列宽并对齐 ----
+    # ---- Fallback: compute column widths manually and align ----
     widths = [_disp_width(h) for h in headers]
     for row in str_rows:
         for i, cell in enumerate(row):
@@ -451,34 +465,34 @@ def render_table(headers, rows):
 
 
 def _disp_width(text):
-    """计算字符串显示宽度：中文/全角字符按 2 计，其余按 1 计。"""
+    """Compute display width of a string: Chinese/full-width chars count as 2, others as 1."""
     width = 0
     for ch in text:
-        # CJK 统一表意文字、全角符号等占两个终端列宽
+        # CJK unified ideographs, full-width symbols, etc. occupy two terminal columns
         width += 2 if ord(ch) > 0x2E7F else 1
     return width
 
 
 def _pad(text, width):
-    """按显示宽度右侧补空格，使中英文混排也能对齐。"""
+    """Right-pad with spaces by display width, so mixed Chinese/English text aligns."""
     return text + " " * (width - _disp_width(text))
 
 
 # ==============================================================================
-# 数据库管理
+# Database management
 # ==============================================================================
 class DatabaseManager:
-    """封装所有 SQLite 操作；负责建表、增删改查。"""
+    """Encapsulates all SQLite operations; handles table creation and CRUD."""
 
     def __init__(self, db_path=DB_FILE):
-        """连接（或创建）数据库文件，并确保所有表存在。"""
+        """Connect to (or create) the database file and ensure all tables exist."""
         self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row  # 查询结果可按列名访问
+        self.conn.row_factory = sqlite3.Row  # query results accessible by column name
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
 
     def _init_schema(self):
-        """创建四张业务表（IF NOT EXISTS，可重复安全调用）。"""
+        """Create the four business tables (IF NOT EXISTS, safe to call repeatedly)."""
         cur = self.conn.cursor()
         cur.executescript(
             """
@@ -515,132 +529,139 @@ class DatabaseManager:
                 related_id   INTEGER,
                 description  TEXT NOT NULL,
                 due_date     TEXT,
-                status       TEXT DEFAULT '待办'
+                status       TEXT DEFAULT 'todo'
             );
             """
         )
         self.conn.commit()
 
-    # ---- 通用执行辅助 ----
+    # ---- Generic execution helpers ----
     def execute(self, sql, params=()):
-        """执行写操作（INSERT/UPDATE/DELETE），返回游标。"""
+        """Execute a write (INSERT/UPDATE/DELETE), returning the cursor."""
         cur = self.conn.cursor()
         cur.execute(sql, params)
         self.conn.commit()
         return cur
 
     def query(self, sql, params=()):
-        """执行查询，返回 sqlite3.Row 列表。"""
+        """Run a query, returning a list of sqlite3.Row."""
         cur = self.conn.cursor()
         cur.execute(sql, params)
         return cur.fetchall()
 
     def query_one(self, sql, params=()):
-        """执行查询，返回单行（无结果则 None）。"""
+        """Run a query, returning a single row (None if no result)."""
         cur = self.conn.cursor()
         cur.execute(sql, params)
         return cur.fetchone()
 
     def close(self):
-        """关闭数据库连接。"""
+        """Close the database connection."""
         self.conn.close()
 
 
 # ==============================================================================
-# 意图解析
+# Intent parsing
 # ==============================================================================
 class CommandParser:
     """
-    将自然语言文本解析为结构化意图。
+    Parse natural-language text into a structured intent.
 
-    解析结果统一为 dict：{"action": <动作名>, ...其余字段}
-    无法识别时返回 {"action": "unknown"}。
-    采用「关键词定位模块 + 正则抽取字段」的策略，足够覆盖典型句式。
+    The parse result is always a dict: {"action": <action name>, ...other fields}
+    Returns {"action": "unknown"} when unrecognized.
+    Uses a "keyword locates the module + regex extracts the fields" strategy,
+    which covers the typical sentence patterns well enough.
     """
 
     def parse(self, text):
-        """解析一条用户输入，返回意图字典。"""
+        """Parse a single user input and return the intent dict."""
         t = text.strip()
         low = t.lower()
 
-        # ---- 全局命令 ----
-        if low in ("help", "帮助", "?", "？"):
+        # ---- Global commands ----
+        if low in ("help", "?"):
             return {"action": "help"}
-        if low in ("exit", "quit", "退出", "再见"):
+        if low in ("exit", "quit", "bye"):
             return {"action": "exit"}
-        if ("概览" in t or "摘要" in t or "仪表" in t
-                or "dashboard" in low or "总览" in t):
+        if ("dashboard" in low or "overview" in low or "summary" in low):
             return {"action": "dashboard"}
-        if low in ("skill", "skills", "技能列表", "skill列表", "显示skill", "显示技能"):
+        if low in ("skill", "skills", "list skills", "show skills"):
             return {"action": "list_skills"}
 
-        # ---- 按「动作 + 实体」分发 ----
-        # 查询/列表类放最前：查询动词（显示/查看/列出…）与增删改前缀互不冲突，
-        # 且可避免“显示未完成任务”里的“完成任务”子串被误判为完成任务命令。
-        if re.match(r"^(显示|查看|列出|查找|搜索|查|展示|列)", t):
+        # ---- Dispatch by "action + entity" ----
+        # Query/list cases go first: query verbs (show/list/view ...) don't conflict
+        # with the create/update/delete prefixes, and this avoids the "complete task"
+        # phrasing inside "show open tasks" being misread as a complete-task command.
+        if re.match(r"(?i)^(show|list|view|find|search)\b", t):
             return self._parse_query(t)
-        # 删除类
-        if t.startswith("删除") or t.startswith("移除"):
+        # Delete cases
+        if re.match(r"(?i)^(delete|remove)\b", t):
             return self._parse_delete(t)
-        # 完成任务
-        if "完成任务" in t or re.search(r"任务.*完成", t):
+        # Complete a task
+        if re.search(r"(?i)\bcomplete\s+task\b", t) or re.search(r"(?i)task.*\b(complete|done)\b", t):
             return self._parse_complete_task(t)
-        # 添加 / 新增 / 创建类
-        if re.match(r"^(添加|新增|创建|新建|加)", t):
+        # Add / create cases
+        if re.match(r"(?i)^(add|create|new)\b", t):
             return self._parse_add(t)
-        # 更新 / 修改类
-        if re.match(r"^(修改|更新|更改|推进|将|把)", t):
+        # Update / modify cases
+        if re.match(r"(?i)^(update|edit|advance|move|set)\b", t):
             return self._parse_update(t)
-        # 关闭机会
-        if "关闭机会" in t or re.search(r"机会.*(赢单|输单|关闭)", t):
+        # Close an opportunity
+        if re.search(r"(?i)\bclose\s+opportunity\b", t) or re.search(r"(?i)opportunity.*\b(won|lost|close)\b", t):
             return self._parse_close_opportunity(t)
 
-        # 无动词前缀的查询兜底：如“客户1的联系人”“机会3的任务”“客户2的任务”
-        if "的联系人" in t or "的任务" in t:
+        # Verb-less query fallback: e.g. "contacts of customer 1", "tasks of opportunity 3"
+        if re.search(r"(?i)\b(contacts?|tasks?)\b\s+of\b", t):
             return self._parse_query(t)
 
         return {"action": "unknown"}
 
     # --------------------------------------------------------------------------
-    # 字段抽取辅助
+    # Field-extraction helpers
     # --------------------------------------------------------------------------
     @staticmethod
     def _extract_phone(text):
-        """抽取手机号（11 位数字，可能带 +86 等，取连续 11 位数字）。"""
+        """Extract a phone number (11 digits, possibly with +86 etc.; take 11 consecutive digits)."""
         m = re.search(r"\b(1\d{10})\b", text)
         return m.group(1) if m else None
 
     @staticmethod
     def _extract_email(text):
-        """抽取邮箱地址。用 ASCII 字符集，避免 \\w 把前面的中文（如“邮箱”）一起吞掉。"""
+        """Extract an email address using an explicit ASCII charset for the address."""
         m = re.search(r"[A-Za-z0-9._\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]+", text)
         return m.group(0) if m else None
 
     @staticmethod
     def _extract_customer_id(text):
-        """抽取客户ID：支持 客户ID=1 / 客户1 / 客户 1 等写法。"""
-        m = re.search(r"客户\s*(?:id|ID)?\s*[=＝:：]?\s*(\d+)", text)
+        """Extract the customer ID: supports customer=1 / customer 1 / customer:1 and similar forms."""
+        m = re.search(r"(?i)customer\s*(?:id)?\s*[=:]?\s*(\d+)", text)
         return int(m.group(1)) if m else None
 
     @staticmethod
     def _extract_amount(text):
-        """抽取金额：匹配“金额50000 / 金额=5万 / 5万元 / 50000元”。"""
-        # 先找“金额”后面的数值（兼容“金额为/改为/=”等分隔写法）
-        m = re.search(r"金额\s*(?:改?为|[=＝:：])?\s*([\d.]+)\s*(万|w|W)?", text)
+        """Extract an amount: matches "amount=50000 / amount 5k / 5k / 50000".
+
+        Units: optional 'k' (x1000) or 'm' (x1,000,000) suffix; plain numbers are
+        taken as-is.
+        """
+        # First look for the value after "amount" (handles "amount=/amount is/amount:" separators)
+        m = re.search(r"(?i)amount\s*(?:is|=|:)?\s*([\d.]+)\s*(k|m)?", text)
         if not m:
-            # 退而找带“元/万”的数字
-            m = re.search(r"([\d.]+)\s*(万|w|W|元)", text)
+            # Fall back to a number followed by a k/m unit
+            m = re.search(r"(?i)([\d.]+)\s*(k|m)\b", text)
         if not m:
             return None
         value = float(m.group(1))
-        unit = m.group(2) if m.lastindex and m.lastindex >= 2 else None
-        if unit in ("万", "w", "W"):
-            value *= 10000
+        unit = (m.group(2) or "").lower() if m.lastindex and m.lastindex >= 2 else None
+        if unit == "k":
+            value *= 1000
+        elif unit == "m":
+            value *= 1000000
         return value
 
     @staticmethod
     def _extract_date(text):
-        """抽取日期 YYYY-MM-DD（也兼容 YYYY/MM/DD）。"""
+        """Extract a date YYYY-MM-DD (also accepts YYYY/MM/DD)."""
         m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", text)
         if not m:
             return None
@@ -649,32 +670,39 @@ class CommandParser:
 
     @staticmethod
     def _match_stage(text):
-        """从文本中识别机会阶段，返回内部值或 None。"""
-        for label, value in STAGE_ALIASES.items():
-            if label in text:
-                return value
+        """Identify the opportunity stage from text, returning the internal value or None."""
+        low = text.lower()
+        # Match longer aliases first (e.g. "needs analysis" before "needs") and use
+        # word boundaries so e.g. "win" doesn't match inside another word.
+        for label in sorted(STAGE_ALIASES, key=len, reverse=True):
+            if re.search(r"\b" + re.escape(label) + r"\b", low):
+                return STAGE_ALIASES[label]
         return None
 
     # --------------------------------------------------------------------------
-    # 添加类
+    # Add cases
     # --------------------------------------------------------------------------
     def _parse_add(self, t):
         """
-        解析“添加客户/联系人/机会/任务”。
-        操作对象 = 紧跟“添加/创建”动词后、出现位置最靠前的实体词。
-        （例如“添加任务 机会1…”里“任务”比“机会”靠前，应判定为加任务，
-          “机会1”只是它的关联参数。）
+        Parse "add customer/contact/opportunity/task".
+        Target object = the entity word appearing earliest right after the
+        "add/create" verb.
+        (e.g. in "add task opportunity 1 ...", "task" comes before "opportunity",
+         so it is judged as adding a task, and "opportunity 1" is merely its
+         associated parameter.)
         """
         candidates = {
-            "联系人": self._parse_add_contact,
-            "任务": self._parse_add_task,
-            "跟进": self._parse_add_task,
-            "机会": self._parse_add_opportunity,
-            "客户": self._parse_add_customer,
+            "contact": self._parse_add_contact,
+            "task": self._parse_add_task,
+            "followup": self._parse_add_task,
+            "opportunity": self._parse_add_opportunity,
+            "deal": self._parse_add_opportunity,
+            "customer": self._parse_add_customer,
         }
+        low = t.lower()
         best_word, best_pos = None, len(t) + 1
         for word in candidates:
-            pos = t.find(word)
+            pos = low.find(word)
             if pos != -1 and pos < best_pos:
                 best_word, best_pos = word, pos
         if best_word:
@@ -683,15 +711,16 @@ class CommandParser:
 
     def _parse_add_customer(self, t):
         """
-        添加客户。示例：
-            添加客户 张三 北京XX科技 13800000000 zhang@x.com 北京朝阳
-        策略：先抽出电话/邮箱，剩余 token 里第一个作姓名，第二个作公司，末尾作地址。
+        Add a customer. Example:
+            add customer Acme Acme Corp 13800000000 zhang@x.com Beijing Chaoyang
+        Strategy: extract phone/email first; of the remaining tokens, the first is
+        the name, the second the company, and the tail the address.
         """
         phone = self._extract_phone(t)
         email = self._extract_email(t)
 
-        # 去掉命令词与已识别的电话/邮箱，剩下的按空白切分
-        body = re.sub(r"^(添加|新增|创建|新建|加)\s*客户", "", t).strip()
+        # Strip the command words and the recognized phone/email, then split the rest on whitespace
+        body = re.sub(r"(?i)^(add|create|new)\s+customer", "", t).strip()
         if phone:
             body = body.replace(phone, " ")
         if email:
@@ -712,27 +741,28 @@ class CommandParser:
 
     def _parse_add_contact(self, t):
         """
-        添加联系人。示例：
-            添加联系人 李四 客户ID=1 职位销售经理 电话138xxxx 邮箱li@x.com
+        Add a contact. Example:
+            add contact John customer=1 title=Sales Manager phone=138xxxx email=li@x.com
         """
         customer_id = self._extract_customer_id(t)
         phone = self._extract_phone(t)
         email = self._extract_email(t)
 
+        # title=... captures the rest of the value up to the next known marker or end
         title = None
-        m = re.search(r"职位\s*[=＝:：]?\s*([^\s]+)", t)
-        if m:
-            title = m.group(1)
+        m = re.search(r"(?i)title\s*[=:]?\s*(.+?)\s*(?=\b(?:customer|phone|email)\b|$)", t)
+        if m and m.group(1).strip():
+            title = m.group(1).strip()
 
-        # 姓名：紧跟“联系人”之后的第一个 token
-        body = re.sub(r"^(添加|新增|创建|新建|加)\s*联系人", "", t).strip()
-        # 去除已识别字段，避免把它们当姓名
+        # Name: the first token right after "contact"
+        body = re.sub(r"(?i)^(add|create|new)\s+contact", "", t).strip()
+        # Remove already-recognized fields so they aren't mistaken for the name
         for chunk in (phone, email):
             if chunk:
                 body = body.replace(chunk, " ")
-        body = re.sub(r"客户\s*(?:id|ID)?\s*[=＝:：]?\s*\d+", " ", body)
-        body = re.sub(r"职位\s*[=＝:：]?\s*[^\s]+", " ", body)
-        body = re.sub(r"(电话|邮箱)\s*[=＝:：]?", " ", body)
+        body = re.sub(r"(?i)customer\s*(?:id)?\s*[=:]?\s*\d+", " ", body)
+        body = re.sub(r"(?i)title\s*[=:]?\s*.+?(?=\b(?:customer|phone|email)\b|$)", " ", body)
+        body = re.sub(r"(?i)(phone|email)\s*[=:]?", " ", body)
         tokens = [x for x in re.split(r"\s+", body) if x]
         name = tokens[0] if tokens else None
 
@@ -747,19 +777,21 @@ class CommandParser:
 
     def _parse_add_opportunity(self, t):
         """
-        创建机会。示例：
-            创建机会 年度采购 客户ID=1 金额50000
+        Create an opportunity. Example:
+            create opportunity Annual Purchase customer=1 amount=50000
         """
         customer_id = self._extract_customer_id(t)
         amount = self._extract_amount(t)
         close_date = self._extract_date(t)
 
-        body = re.sub(r"^(添加|新增|创建|新建|加)\s*机会", "", t).strip()
-        body = re.sub(r"客户\s*(?:id|ID)?\s*[=＝:：]?\s*\d+", " ", body)
-        body = re.sub(r"金额\s*[=＝:：]?\s*[\d.]+\s*(万|w|W|元)?", " ", body)
+        body = re.sub(r"(?i)^(add|create|new)\s+(opportunity|deal)", "", t).strip()
+        body = re.sub(r"(?i)customer\s*(?:id)?\s*[=:]?\s*\d+", " ", body)
+        body = re.sub(r"(?i)amount\s*[=:]?\s*[\d.]+\s*(k|m)?\b", " ", body)
+        body = re.sub(r"(?i)\bdue\b|\bdate\b", " ", body)
         body = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", " ", body)
         tokens = [x for x in re.split(r"\s+", body) if x]
-        name = tokens[0] if tokens else None
+        # The opportunity name is the leading free-text (may be multiple words)
+        name = " ".join(tokens) if tokens else None
 
         return {
             "action": "add_opportunity",
@@ -771,23 +803,23 @@ class CommandParser:
 
     def _parse_add_task(self, t):
         """
-        添加任务。示例：
-            添加任务 客户1 回访客户 截止2026-06-10
-            添加任务 机会3 准备方案 2026-06-01
-        关联对象：出现“机会”关联机会，否则默认关联客户。
+        Add a task. Example:
+            add task customer 1 follow up call due 2026-06-10
+            add task opportunity 3 prepare proposal 2026-06-01
+        Associated object: if "opportunity" appears it links to an opportunity, otherwise it defaults to a customer.
         """
         due_date = self._extract_date(t)
-        if "机会" in t:
+        if re.search(r"(?i)\bopportunity\b|\bdeal\b", t):
             related_type = "opportunity"
-            m = re.search(r"机会\s*(?:id|ID)?\s*[=＝:：]?\s*(\d+)", t)
+            m = re.search(r"(?i)(?:opportunity|deal)\s*(?:id)?\s*[=:]?\s*(\d+)", t)
         else:
             related_type = "customer"
-            m = re.search(r"客户\s*(?:id|ID)?\s*[=＝:：]?\s*(\d+)", t)
+            m = re.search(r"(?i)customer\s*(?:id)?\s*[=:]?\s*(\d+)", t)
         related_id = int(m.group(1)) if m else None
 
-        body = re.sub(r"^(添加|新增|创建|新建|加)\s*(任务|跟进)", "", t).strip()
-        body = re.sub(r"(客户|机会)\s*(?:id|ID)?\s*[=＝:：]?\s*\d+", " ", body)
-        body = re.sub(r"截止\s*[=＝:：]?", " ", body)
+        body = re.sub(r"(?i)^(add|create|new)\s+(task|followup)", "", t).strip()
+        body = re.sub(r"(?i)(customer|opportunity|deal)\s*(?:id)?\s*[=:]?\s*\d+", " ", body)
+        body = re.sub(r"(?i)\bdue\b\s*[=:]?", " ", body)
         body = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", " ", body)
         description = " ".join(x for x in re.split(r"\s+", body) if x).strip()
 
@@ -800,31 +832,32 @@ class CommandParser:
         }
 
     # --------------------------------------------------------------------------
-    # 查询类
+    # Query cases
     # --------------------------------------------------------------------------
     def _parse_query(self, t):
-        """解析各类查询/列表命令。"""
-        # 按客户筛选联系人：客户1的联系人 / 客户ID=1 联系人
-        if "联系人" in t:
+        """Parse the various query/list commands."""
+        low = t.lower()
+        # Filter contacts by customer: contacts of customer 1 / customer=1 contacts
+        if "contact" in low:
             cid = self._extract_customer_id(t)
             if cid is not None:
                 return {"action": "list_contacts", "customer_id": cid}
             return {"action": "list_contacts", "customer_id": None}
 
-        # 机会列表
-        if "机会" in t:
+        # Opportunity list
+        if "opportunity" in low or "deal" in low:
             return {"action": "list_opportunities"}
 
-        # 任务：未完成 / 全部 / 按对象
-        if "任务" in t:
-            if "未完成" in t or "待办" in t or "进行中" in t:
-                status = "待办"
+        # Tasks: open / all / by object
+        if "task" in low:
+            if re.search(r"(?i)\b(open|todo|pending|in[\s\-]?progress|incomplete|unfinished)\b", t):
+                status = "todo"
             else:
                 status = None
             cid = None
             oid = None
-            mo = re.search(r"机会\s*(?:id|ID)?\s*[=＝:：]?\s*(\d+)", t)
-            mc = re.search(r"客户\s*(?:id|ID)?\s*[=＝:：]?\s*(\d+)", t)
+            mo = re.search(r"(?i)(?:opportunity|deal)\s*(?:id)?\s*[=:]?\s*(\d+)", t)
+            mc = re.search(r"(?i)customer\s*(?:id)?\s*[=:]?\s*(\d+)", t)
             if mo:
                 oid = int(mo.group(1))
             elif mc:
@@ -836,9 +869,9 @@ class CommandParser:
                 "opportunity_id": oid,
             }
 
-        # 客户：查找/搜索 客户 关键词
-        if "客户" in t:
-            m = re.search(r"(?:查找|搜索|查)\s*客户\s*(.+)$", t)
+        # Customers: find/search customer by keyword
+        if "customer" in low:
+            m = re.search(r"(?i)(?:find|search)\s+customer\s+(.+)$", t)
             if m and m.group(1).strip():
                 return {"action": "search_customer", "keyword": m.group(1).strip()}
             return {"action": "list_customers"}
@@ -846,13 +879,15 @@ class CommandParser:
         return {"action": "unknown"}
 
     # --------------------------------------------------------------------------
-    # 更新类
+    # Update cases
     # --------------------------------------------------------------------------
     def _parse_update(self, t):
-        """解析更新命令：客户字段 / 机会阶段 / 机会金额、日期。"""
-        # 机会阶段推进：将机会3推进到谈判 / 更新机会5的阶段为赢单
-        if "机会" in t and ("阶段" in t or "推进" in t or self._match_stage(t)):
-            m = re.search(r"机会\s*(?:#|id|ID)?\s*(\d+)", t)
+        """Parse update commands: customer field / opportunity stage / opportunity amount, date."""
+        low = t.lower()
+        is_opp = ("opportunity" in low or "deal" in low)
+        # Advance opportunity stage: advance opportunity 3 to negotiation / set opportunity 5 stage won
+        if is_opp and ("stage" in low or "advance" in low or "move" in low or self._match_stage(t)):
+            m = re.search(r"(?i)(?:opportunity|deal)\s*(?:#|id)?\s*(\d+)", t)
             stage = self._match_stage(t)
             if m and stage:
                 return {
@@ -861,9 +896,9 @@ class CommandParser:
                     "stage": stage,
                 }
 
-        # 机会金额修改：修改机会5金额为80000
-        if "机会" in t and ("金额" in t or "元" in t or "万" in t):
-            m = re.search(r"机会\s*(?:#|id|ID)?\s*(\d+)", t)
+        # Modify opportunity amount: update opportunity 5 amount=80000
+        if is_opp and "amount" in low:
+            m = re.search(r"(?i)(?:opportunity|deal)\s*(?:#|id)?\s*(\d+)", t)
             amount = self._extract_amount(t)
             if m and amount is not None:
                 return {
@@ -872,9 +907,9 @@ class CommandParser:
                     "amount": amount,
                 }
 
-        # 机会预计关闭日期：修改机会3的关闭日期为2026-07-01
-        if "机会" in t and "日期" in t:
-            m = re.search(r"机会\s*(?:#|id|ID)?\s*(\d+)", t)
+        # Opportunity expected close date: update opportunity 3 date=2026-07-01
+        if is_opp and "date" in low:
+            m = re.search(r"(?i)(?:opportunity|deal)\s*(?:#|id)?\s*(\d+)", t)
             date = self._extract_date(t)
             if m and date:
                 return {
@@ -883,9 +918,9 @@ class CommandParser:
                     "close_date": date,
                 }
 
-        # 客户字段更新：修改客户3的电话为139xxxx / 更新客户2的邮箱为a@b.com
-        if "客户" in t:
-            m = re.search(r"客户\s*(?:#|id|ID)?\s*(\d+)", t)
+        # Customer field update: update customer 3 phone=139xxxx / edit customer 2 email=a@b.com
+        if "customer" in low:
+            m = re.search(r"(?i)customer\s*(?:#|id)?\s*(\d+)", t)
             if m:
                 cid = int(m.group(1))
                 field, value = self._parse_field_value(t)
@@ -897,9 +932,9 @@ class CommandParser:
                         "value": value,
                     }
 
-        # 联系人字段更新：修改联系人2的电话为139xxxx
-        if "联系人" in t:
-            m = re.search(r"联系人\s*(?:#|id|ID)?\s*(\d+)", t)
+        # Contact field update: update contact 2 phone=139xxxx
+        if "contact" in low:
+            m = re.search(r"(?i)contact\s*(?:#|id)?\s*(\d+)", t)
             if m:
                 field, value = self._parse_field_value(t)
                 if field:
@@ -914,81 +949,81 @@ class CommandParser:
 
     def _parse_field_value(self, t):
         """
-        从“…的<字段>为<值>”中抽取字段名与值。
-        返回 (db_field, value)；无法识别返回 (None, None)。
+        Extract the field name and value from "... <field> to/= <value>".
+        Returns (db_field, value); returns (None, None) when unrecognized.
         """
         field_map = {
-            "电话": "phone",
-            "手机": "phone",
-            "邮箱": "email",
-            "邮件": "email",
-            "名称": "name",
-            "姓名": "name",
-            "名字": "name",
-            "公司": "company",
-            "地址": "address",
-            "职位": "title",
+            "phone": "phone",
+            "mobile": "phone",
+            "email": "email",
+            "mail": "email",
+            "name": "name",
+            "company": "company",
+            "address": "address",
+            "title": "title",
         }
-        m = re.search(r"的?\s*(电话|手机|邮箱|邮件|名称|姓名|名字|公司|地址|职位)\s*"
-                      r"(?:改?为|=|＝|:|：)\s*(.+)$", t)
+        m = re.search(r"(?i)\b(phone|mobile|email|mail|name|company|address|title)\s*"
+                      r"(?:to|=|:)\s*(.+)$", t)
         if not m:
             return None, None
-        field = field_map[m.group(1)]
+        field = field_map[m.group(1).lower()]
         value = m.group(2).strip()
         return field, value
 
     # --------------------------------------------------------------------------
-    # 删除类
+    # Delete cases
     # --------------------------------------------------------------------------
     def _parse_delete(self, t):
-        """解析删除命令：客户 / 联系人 / 机会 / 任务。"""
-        if "客户" in t:
-            m = re.search(r"客户\s*(?:#|id|ID)?\s*(\d+)", t)
-            if m:
-                return {"action": "delete_customer", "id": int(m.group(1))}
-        if "联系人" in t:
-            m = re.search(r"联系人\s*(?:#|id|ID)?\s*(\d+)", t)
+        """Parse delete commands: customer / contact / opportunity / task."""
+        low = t.lower()
+        # Check contact before customer ("contact" contains no "customer" but order is harmless)
+        if "contact" in low:
+            m = re.search(r"(?i)contact\s*(?:#|id)?\s*(\d+)", t)
             if m:
                 return {"action": "delete_contact", "id": int(m.group(1))}
-        if "机会" in t:
-            m = re.search(r"机会\s*(?:#|id|ID)?\s*(\d+)", t)
+        if "customer" in low:
+            m = re.search(r"(?i)customer\s*(?:#|id)?\s*(\d+)", t)
+            if m:
+                return {"action": "delete_customer", "id": int(m.group(1))}
+        if "opportunity" in low or "deal" in low:
+            m = re.search(r"(?i)(?:opportunity|deal)\s*(?:#|id)?\s*(\d+)", t)
             if m:
                 return {"action": "delete_opportunity", "id": int(m.group(1))}
-        if "任务" in t:
-            m = re.search(r"任务\s*(?:#|id|ID)?\s*(\d+)", t)
+        if "task" in low:
+            m = re.search(r"(?i)task\s*(?:#|id)?\s*(\d+)", t)
             if m:
                 return {"action": "delete_task", "id": int(m.group(1))}
         return {"action": "unknown"}
 
     # --------------------------------------------------------------------------
-    # 完成任务 / 关闭机会
+    # Complete a task / close an opportunity
     # --------------------------------------------------------------------------
     def _parse_complete_task(self, t):
-        """解析“完成任务ID 8 / 完成任务8”。"""
-        m = re.search(r"任务\s*(?:#|id|ID)?\s*(\d+)", t)
+        """Parse "complete task 8 / complete task #8"."""
+        m = re.search(r"(?i)task\s*(?:#|id)?\s*(\d+)", t)
         if m:
             return {"action": "complete_task", "id": int(m.group(1))}
         return {"action": "unknown"}
 
     def _parse_close_opportunity(self, t):
         """
-        解析关闭机会：关闭机会2 赢单 价格合适 / 机会3输单 预算不足
-        result: won / lost；reason 为剩余描述。
+        Parse closing an opportunity: close opportunity 2 won good price / opportunity 3 lost budget
+        result: won / lost; reason is the remaining description.
         """
-        m = re.search(r"机会\s*(?:#|id|ID)?\s*(\d+)", t)
+        m = re.search(r"(?i)(?:opportunity|deal)\s*(?:#|id)?\s*(\d+)", t)
         if not m:
             return {"action": "unknown"}
         oid = int(m.group(1))
-        if "赢单" in t or "成交" in t:
+        if re.search(r"(?i)\b(won|win)\b", t):
             result = "won"
-        elif "输单" in t or "丢单" in t or "失败" in t:
+        elif re.search(r"(?i)\b(lost|lose|fail)\b", t):
             result = "lost"
         else:
-            result = None  # 由业务层追问
+            result = None  # the business layer will follow up
 
-        # 关闭原因：去掉命令词与关键字后剩余文本
-        reason = re.sub(r"(关闭|机会|赢单|成交|输单|丢单|失败)", " ", t)
-        reason = re.sub(r"(?:#|id|ID)?\s*\d+", " ", reason)
+        # Close reason: the text remaining after removing command words and keywords
+        reason = re.sub(r"(?i)\b(close|opportunity|deal|won|win|lost|lose|fail)\b", " ", t)
+        reason = re.sub(r"(?:#|id)?\s*\d+", " ", reason)
         reason = " ".join(x for x in re.split(r"\s+", reason) if x).strip()
         return {
             "action": "close_opportunity",
@@ -999,32 +1034,35 @@ class CommandParser:
 
 
 # ==============================================================================
-# 主 Agent：分发命令、执行业务逻辑、产出结构化结果
+# Main Agent: dispatch commands, run business logic, produce structured results
 # ==============================================================================
 #
-# 业务方法不再直接 print，而是返回「结果块」列表，块的形式：
+# Business methods no longer print directly; instead they return a list of
+# "result blocks", in these forms:
 #   {"kind": "text",  "text": "...", "tone": "ok|err|info|warn"}
 #   {"kind": "table", "title": "...", "headers": [...], "rows": [[...]]}
 #   {"kind": "stats", "title": "...", "items": [{"label":..,"value":..}, ...]}
-# 这样 CLI（_render_cli 打印）与 Web（转 JSON 给前端）可以共用同一套逻辑。
+# This way the CLI (_render_cli prints) and the Web (converts to JSON for the
+# frontend) can share the same logic.
 # ==============================================================================
 class CRMAgent:
-    """CRM 智能体：解析意图 -> 执行 -> 返回结构化结果块。"""
+    """CRM agent: parse intent -> execute -> return structured result blocks."""
 
     def __init__(self, interactive=True):
         """
-        初始化数据库与解析器。
-        interactive=True ：CLI 模式，缺字段时通过 input() 追问、删除二次确认。
-        interactive=False：Web 模式，缺字段直接返回提示块；删除由前端弹窗确认后放行。
+        Initialize the database and parser.
+        interactive=True : CLI mode; prompt via input() for missing fields, and confirm deletes.
+        interactive=False: Web mode; return a notice block directly for missing fields;
+                           deletes are confirmed by a frontend dialog before being allowed.
         """
         self.interactive = interactive
         self.db = DatabaseManager()
         self.parser = CommandParser()
-        # 安全网关客户端（可用 SENTINEL_ENABLED=0 关闭）
+        # Security gateway client (can be disabled with SENTINEL_ENABLED=0)
         self.sentinel = SentinelClient() if SENTINEL_ENABLED else None
-        # 工作人员上传的声明式 skill（上传时过网关扫描，benign 才装载）
+        # Declarative skills uploaded by staff (scanned by the gateway on upload; only benign ones are loaded)
         self.skills = SkillManager(self.sentinel)
-        # 动作 -> 处理方法 的分发表
+        # action -> handler method dispatch table
         self.handlers = {
             "help": self.show_help,
             "dashboard": self.show_dashboard,
@@ -1052,37 +1090,37 @@ class CRMAgent:
         }
 
     # --------------------------------------------------------------------------
-    # CLI 主循环
+    # CLI main loop
     # --------------------------------------------------------------------------
     def run(self):
-        """启动命令行交互循环，直到用户输入 exit/quit。"""
+        """Start the command-line interaction loop until the user types exit/quit."""
         print("=" * 60)
-        print(" 🤝  CRM-Agent 已启动 —— 用自然语言管理你的客户与商机")
-        print("     输入 help 查看命令示例，输入 exit 退出")
+        print(" 🤝  CRM-Agent started — manage your customers and deals in natural language")
+        print("     Type help to see example commands, type exit to quit")
         if self.sentinel:
-            print(f" 🛡️  已接入 AI_Sentinel 安全网关：{GATEWAY_URL}")
+            print(f" 🛡️  Wired into the AI_Sentinel security gateway: {GATEWAY_URL}")
         else:
-            print(" 🛡️  安全网关已关闭（SENTINEL_ENABLED=0）")
+            print(" 🛡️  Security gateway disabled (SENTINEL_ENABLED=0)")
         print("=" * 60)
         while True:
             try:
                 raw = input("\nCRM-Agent > ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n再见！")
+                print("\nGoodbye!")
                 break
             if not raw:
                 continue
             if self.parser.parse(raw).get("action") == "exit":
-                print("再见！数据已保存。")
+                print("Goodbye! Your data has been saved.")
                 break
             self._render_cli(self.process(raw))
         self.db.close()
 
     def process(self, raw):
-        """解析并执行一条命令，返回结果块列表（CLI 与 Web 共用此入口）。"""
-        prefix = []  # 守卫产生的提示块，拼在业务结果前面
+        """Parse and execute a single command, returning a list of result blocks (shared entry point for CLI and Web)."""
+        prefix = []  # notice blocks produced by the guard, prepended to the business result
 
-        # ── 第 1 层：输入守卫（每条命令都会请求网关，网关因此能记录日志）──
+        # -- Layer 1: input guard (every command requests the gateway, so the gateway can log it) --
         if self.sentinel:
             ok, info = self.sentinel.check_input(raw)
             if not ok:
@@ -1091,20 +1129,20 @@ class CRMAgent:
                 desc = (info.get("details") or {}).get("rule_description") \
                     or info.get("reason") or ""
                 if detector in BLOCK_DETECTORS:
-                    return [self._err(f"⛔ 输入被安全网关拦截：{rule}"
+                    return [self._err(f"⛔ Input blocked by the security gateway: {rule}"
                                       + (f" — {desc}" if desc else ""))]
-                # PII/敏感类：CRM 录入合法字段，放行但留痕
+                # PII/sensitive category: CRM is entering legitimate fields; pass but leave a trace
                 prefix.append(self._info(
-                    f"🔐 网关提示：输入含敏感字段（{rule}），按 CRM 策略放行。"))
+                    f"🔐 Gateway notice: input contains a sensitive field ({rule}); passed per CRM policy."))
             elif info.get("warn"):
                 prefix.append(self._text("⚠️ " + info["warn"], "warn"))
 
         intent = self.parser.parse(raw)
         action = intent.get("action")
         if action == "exit":
-            return prefix + [self._info("Web 模式下直接关闭页面即可，无需退出命令。")]
+            return prefix + [self._info("In Web mode just close the page; no exit command is needed.")]
         if action == "unknown":
-            # 兜底：交给已装载的 skill 触发匹配
+            # Fallback: hand off to trigger matching of the loaded skills
             hit = self.skills.match(raw) if self.skills else None
             if hit and hit.get("action") in self.handlers:
                 action = hit["action"]
@@ -1112,28 +1150,28 @@ class CRMAgent:
             elif hit and hit.get("respond"):
                 return prefix + [self._info(f"💡 {hit['respond']}")]
             else:
-                return prefix + [self._err("🤔 没理解这条指令。点上方示例或输入 help 查看用法。")]
+                return prefix + [self._err("🤔 Didn't understand that command. Click an example above or type help to see usage.")]
         handler = self.handlers.get(action)
         if not handler:
-            return prefix + [self._err("该功能暂未实现。")]
+            return prefix + [self._err("This feature is not implemented yet.")]
 
-        # ── 第 2 层：动作守卫（仅删除类高危操作，会发 /confirm-action 上报）──
+        # -- Layer 2: action guard (high-risk delete operations only; sends a /confirm-action report) --
         if self.sentinel and action in HIGH_RISK_ACTIONS:
             params = {"entity": HIGH_RISK_ACTIONS[action], "id": intent.get("id")}
             allowed, reason = self.sentinel.confirm_action("remove_record", params, raw)
             if not allowed:
-                return prefix + [self._err(f"⛔ 操作被安全网关阻断：{reason}")]
+                return prefix + [self._err(f"⛔ Operation blocked by the security gateway: {reason}")]
 
         try:
             result = handler(intent)
             result = result if isinstance(result, list) else [result]
             return prefix + result
-        except Exception as e:  # 异常优雅降级，不让程序崩溃
-            return prefix + [self._err(f"⚠️ 操作出错：{e}")]
+        except Exception as e:  # graceful degradation on error; don't crash the program
+            return prefix + [self._err(f"⚠️ Operation error: {e}")]
 
     @staticmethod
     def _render_cli(blocks):
-        """把结果块渲染到命令行。"""
+        """Render result blocks to the command line."""
         for b in blocks:
             kind = b.get("kind")
             if kind == "text":
@@ -1146,39 +1184,40 @@ class CRMAgent:
                 if b.get("title"):
                     print("\n" + b["title"])
                 print(render_table(
-                    ["指标", "数值"],
+                    ["Metric", "Value"],
                     [[i["label"], i["value"]] for i in b["items"]],
                 ))
 
     # --------------------------------------------------------------------------
-    # 结果块构造 & 交互辅助
+    # Result-block construction & interaction helpers
     # --------------------------------------------------------------------------
     @staticmethod
     def _text(s, tone="info"):
-        """构造一个文本块。tone 控制前端配色：ok/err/info/warn。"""
+        """Build a text block. tone controls the frontend color: ok/err/info/warn."""
         return {"kind": "text", "text": s, "tone": tone}
 
     def _ok(self, s):
-        """成功提示块。"""
+        """Success notice block."""
         return self._text(s, "ok")
 
     def _err(self, s):
-        """错误提示块。"""
+        """Error notice block."""
         return self._text(s, "err")
 
     def _info(self, s):
-        """普通信息块。"""
+        """Plain info block."""
         return self._text(s, "info")
 
     @staticmethod
     def _table(title, headers, rows):
-        """构造一个表格块。"""
+        """Build a table block."""
         return {"kind": "table", "title": title, "headers": headers, "rows": rows}
 
     def _ask(self, prompt):
         """
-        追问一个字段。CLI 模式走 input()；Web 模式返回空串
-        （Web 端要求一次性把信息写在命令里，缺失时由调用方给出补充提示）。
+        Prompt for a field. CLI mode uses input(); Web mode returns an empty string
+        (the Web side requires all info in one command; the caller supplies a
+        supplementary hint when something is missing).
         """
         if not self.interactive:
             return ""
@@ -1189,46 +1228,46 @@ class CRMAgent:
 
     def _confirm(self, prompt):
         """
-        二次确认。CLI 模式走 input()；Web 模式默认放行
-        （前端已用弹窗确认过删除操作）。
+        Confirmation prompt. CLI mode uses input(); Web mode passes by default
+        (the frontend already confirmed the delete via a dialog).
         """
         if not self.interactive:
             return True
         try:
-            ans = input(f"   ⚠️  {prompt}（y/n）").strip().lower()
+            ans = input(f"   ⚠️  {prompt} (y/n)").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return False
-        return ans in ("y", "yes", "是", "确认")
+        return ans in ("y", "yes")
 
     def _get_customer(self, cid):
-        """按 ID 取客户行，不存在返回 None。"""
+        """Fetch the customer row by ID; return None if not found."""
         return self.db.query_one("SELECT * FROM customers WHERE id=?", (cid,))
 
     # ==========================================================================
-    # 帮助 & 仪表板
+    # Help & dashboard
     # ==========================================================================
     def list_skills(self, _intent):
-        """展示已装载与被隔离的 skill。"""
+        """Show the loaded and quarantined skills."""
         installed, quarantined = self.skills.listing()
         blocks = []
         if installed:
             blocks.append(self._table(
-                "📦 已装载 Skill", ["名称", "规则数", "说明"],
+                "📦 Loaded Skills", ["Name", "Rules", "Description"],
                 [[s["name"], s["rules"], s.get("desc", "")] for s in installed]))
         else:
-            blocks.append(self._info("还没有已装载的 skill。工作人员可在 Web 端「Skill 管理」上传。"))
+            blocks.append(self._info("No skills loaded yet. Staff can upload them via \"Skill Management\" on the Web UI."))
         if quarantined:
             blocks.append(self._table(
-                "🚫 已隔离 Skill（未通过安全扫描）", ["名称", "判定", "证据"],
+                "🚫 Quarantined Skills (failed security scan)", ["Name", "Verdict", "Evidence"],
                 [[s.get("name", ""), s.get("verdict", ""), s.get("evidence", "")] for s in quarantined]))
         return blocks
 
     def show_help(self, _intent):
-        """返回所有可用命令示例。"""
+        """Return all available example commands."""
         return [self._text(HELP_TEXT)]
 
     def show_dashboard(self, _intent):
-        """返回业务概览统计（stats 块）。"""
+        """Return the business-overview stats (stats block)."""
         cust = self.db.query_one("SELECT COUNT(*) c FROM customers")["c"]
         open_opp = self.db.query_one(
             "SELECT COUNT(*) c FROM opportunities WHERE stage NOT IN ('won','lost')"
@@ -1241,25 +1280,25 @@ class CRMAgent:
             "SELECT COALESCE(SUM(amount),0) s FROM opportunities WHERE stage='won'"
         )["s"]
         todo = self.db.query_one(
-            "SELECT COUNT(*) c FROM tasks WHERE status='待办'"
+            "SELECT COUNT(*) c FROM tasks WHERE status='todo'"
         )["c"]
         return [{
             "kind": "stats",
-            "title": "📊 业务概览",
+            "title": "📊 Business Overview",
             "items": [
-                {"label": "客户总数", "value": cust},
-                {"label": "进行中机会", "value": open_opp},
-                {"label": "进行中金额", "value": f"{total_amt:,.0f}"},
-                {"label": "已赢单金额", "value": f"{won_amt:,.0f}"},
-                {"label": "未完成任务", "value": todo},
+                {"label": "Total customers", "value": cust},
+                {"label": "Open opportunities", "value": open_opp},
+                {"label": "Open pipeline amount", "value": f"{total_amt:,.0f}"},
+                {"label": "Won amount", "value": f"{won_amt:,.0f}"},
+                {"label": "Open tasks", "value": todo},
             ],
         }]
 
     # ==========================================================================
-    # 客户管理
+    # Customer management
     # ==========================================================================
     def add_customer(self, intent):
-        """添加客户；姓名为必填（缺失则追问/提示），电话建议填写。"""
+        """Add a customer; name is required (prompt/notice if missing), phone recommended."""
         name = intent.get("name")
         phone = intent.get("phone")
         company = intent.get("company")
@@ -1267,11 +1306,11 @@ class CRMAgent:
         address = intent.get("address")
 
         if not name:
-            name = self._ask("请输入客户名称：") or None
+            name = self._ask("Enter the customer name: ") or None
             if not name:
-                return [self._err("❌ 缺少客户名称，已取消。示例：添加客户 张三 公司名 138...")]
+                return [self._err("❌ Missing customer name; cancelled. Example: add customer Acme Acme Corp 138...")]
         if not phone:
-            phone = self._ask("请输入客户电话（可回车跳过）：") or None
+            phone = self._ask("Enter the customer phone (press Enter to skip): ") or None
 
         self.db.execute(
             "INSERT INTO customers (name, company, phone, email, address, created_at)"
@@ -1280,23 +1319,23 @@ class CRMAgent:
              datetime.now().strftime("%Y-%m-%d %H:%M")),
         )
         cid = self.db.query_one("SELECT last_insert_rowid() id")["id"]
-        return [self._ok(f"✅ 已添加客户 #{cid}：{name}"
-                         + (f"（{company}）" if company else ""))]
+        return [self._ok(f"✅ Added customer #{cid}: {name}"
+                         + (f" ({company})" if company else ""))]
 
     def list_customers(self, _intent):
-        """列出所有客户。"""
+        """List all customers."""
         rows = self.db.query(
             "SELECT id, name, company, phone, email, address FROM customers ORDER BY id"
         )
         return [self._table(
-            "👥 客户列表",
-            ["ID", "名称", "公司", "电话", "邮箱", "地址"],
+            "👥 Customer List",
+            ["ID", "Name", "Company", "Phone", "Email", "Address"],
             [[r["id"], r["name"], r["company"], r["phone"], r["email"], r["address"]]
              for r in rows],
         )]
 
     def search_customer(self, intent):
-        """按名称或电话模糊搜索客户。"""
+        """Fuzzy-search customers by name or phone."""
         kw = intent["keyword"]
         rows = self.db.query(
             "SELECT id, name, company, phone, email, address FROM customers "
@@ -1304,39 +1343,39 @@ class CRMAgent:
             (f"%{kw}%", f"%{kw}%"),
         )
         return [self._table(
-            f"🔍 搜索“{kw}”的结果",
-            ["ID", "名称", "公司", "电话", "邮箱", "地址"],
+            f"🔍 Results for \"{kw}\"",
+            ["ID", "Name", "Company", "Phone", "Email", "Address"],
             [[r["id"], r["name"], r["company"], r["phone"], r["email"], r["address"]]
              for r in rows],
         )]
 
     def update_customer(self, intent):
-        """更新客户的某个字段。"""
+        """Update a single field of a customer."""
         cid, field, value = intent["id"], intent["field"], intent["value"]
         if not self._get_customer(cid):
-            return [self._err(f"❌ 客户 #{cid} 不存在。")]
+            return [self._err(f"❌ Customer #{cid} does not exist.")]
         self.db.execute(
             f"UPDATE customers SET {field}=? WHERE id=?", (value, cid)
         )
-        return [self._ok(f"✅ 已更新客户 #{cid} 的 {field} 为「{value}」。")]
+        return [self._ok(f"✅ Updated customer #{cid}'s {field} to \"{value}\".")]
 
     def delete_customer(self, intent):
-        """删除客户（二次确认；同时清理其联系人）。"""
+        """Delete a customer (with confirmation; also cleans up their contacts)."""
         cid = intent["id"]
         cust = self._get_customer(cid)
         if not cust:
-            return [self._err(f"❌ 客户 #{cid} 不存在。")]
-        if not self._confirm(f"确认删除客户 #{cid}「{cust['name']}」？此操作不可撤销"):
-            return [self._info("已取消删除。")]
+            return [self._err(f"❌ Customer #{cid} does not exist.")]
+        if not self._confirm(f"Confirm deleting customer #{cid} \"{cust['name']}\"? This cannot be undone"):
+            return [self._info("Deletion cancelled.")]
         self.db.execute("DELETE FROM customers WHERE id=?", (cid,))
         self.db.execute("DELETE FROM contacts WHERE customer_id=?", (cid,))
-        return [self._ok(f"🗑️ 已删除客户 #{cid}「{cust['name']}」及其联系人。")]
+        return [self._ok(f"🗑️ Deleted customer #{cid} \"{cust['name']}\" and their contacts.")]
 
     # ==========================================================================
-    # 联系人管理
+    # Contact management
     # ==========================================================================
     def add_contact(self, intent):
-        """添加联系人；姓名与所属客户为必填。"""
+        """Add a contact; name and owning customer are required."""
         name = intent.get("name")
         customer_id = intent.get("customer_id")
         title = intent.get("title")
@@ -1344,14 +1383,14 @@ class CRMAgent:
         email = intent.get("email")
 
         if not name:
-            name = self._ask("请输入联系人姓名：") or None
+            name = self._ask("Enter the contact name: ") or None
             if not name:
-                return [self._err("❌ 缺少联系人姓名，已取消。")]
+                return [self._err("❌ Missing contact name; cancelled.")]
         if customer_id is None:
-            ans = self._ask("请输入所属客户ID：")
+            ans = self._ask("Enter the owning customer ID: ")
             customer_id = int(ans) if ans.isdigit() else None
         if customer_id is None or not self._get_customer(customer_id):
-            return [self._err(f"❌ 客户 #{customer_id} 不存在，无法添加联系人。")]
+            return [self._err(f"❌ Customer #{customer_id} does not exist; cannot add contact.")]
 
         self.db.execute(
             "INSERT INTO contacts (customer_id, name, title, phone, email)"
@@ -1359,12 +1398,12 @@ class CRMAgent:
             (customer_id, name, title, phone, email),
         )
         cid = self.db.query_one("SELECT last_insert_rowid() id")["id"]
-        return [self._ok(f"✅ 已添加联系人 #{cid}：{name}"
-                         + (f"（{title}）" if title else "")
-                         + f"，所属客户 #{customer_id}")]
+        return [self._ok(f"✅ Added contact #{cid}: {name}"
+                         + (f" ({title})" if title else "")
+                         + f", owning customer #{customer_id}")]
 
     def list_contacts(self, intent):
-        """列出联系人，展示所属客户名；可按客户筛选。"""
+        """List contacts with their owning customer name; optionally filter by customer."""
         customer_id = intent.get("customer_id")
         if customer_id is not None:
             rows = self.db.query(
@@ -1374,59 +1413,59 @@ class CRMAgent:
                 "WHERE ct.customer_id=? ORDER BY ct.id",
                 (customer_id,),
             )
-            title = f"📇 客户 #{customer_id} 的联系人"
+            title = f"📇 Contacts of customer #{customer_id}"
         else:
             rows = self.db.query(
                 "SELECT ct.id, ct.name, ct.title, ct.phone, ct.email, "
                 "c.name AS cust FROM contacts ct "
                 "LEFT JOIN customers c ON ct.customer_id=c.id ORDER BY ct.id"
             )
-            title = "📇 联系人列表"
+            title = "📇 Contact List"
         return [self._table(
             title,
-            ["ID", "姓名", "职位", "电话", "邮箱", "所属客户"],
+            ["ID", "Name", "Title", "Phone", "Email", "Customer"],
             [[r["id"], r["name"], r["title"], r["phone"], r["email"], r["cust"]]
              for r in rows],
         )]
 
     def update_contact(self, intent):
-        """更新联系人字段。"""
+        """Update a contact field."""
         cid, field, value = intent["id"], intent["field"], intent["value"]
         if not self.db.query_one("SELECT id FROM contacts WHERE id=?", (cid,)):
-            return [self._err(f"❌ 联系人 #{cid} 不存在。")]
+            return [self._err(f"❌ Contact #{cid} does not exist.")]
         self.db.execute(f"UPDATE contacts SET {field}=? WHERE id=?", (value, cid))
-        return [self._ok(f"✅ 已更新联系人 #{cid} 的 {field} 为「{value}」。")]
+        return [self._ok(f"✅ Updated contact #{cid}'s {field} to \"{value}\".")]
 
     def delete_contact(self, intent):
-        """删除联系人（二次确认）。"""
+        """Delete a contact (with confirmation)."""
         cid = intent["id"]
         row = self.db.query_one("SELECT name FROM contacts WHERE id=?", (cid,))
         if not row:
-            return [self._err(f"❌ 联系人 #{cid} 不存在。")]
-        if not self._confirm(f"确认删除联系人 #{cid}「{row['name']}」？"):
-            return [self._info("已取消删除。")]
+            return [self._err(f"❌ Contact #{cid} does not exist.")]
+        if not self._confirm(f"Confirm deleting contact #{cid} \"{row['name']}\"?"):
+            return [self._info("Deletion cancelled.")]
         self.db.execute("DELETE FROM contacts WHERE id=?", (cid,))
-        return [self._ok(f"🗑️ 已删除联系人 #{cid}「{row['name']}」。")]
+        return [self._ok(f"🗑️ Deleted contact #{cid} \"{row['name']}\".")]
 
     # ==========================================================================
-    # 销售机会管理
+    # Opportunity management
     # ==========================================================================
     def add_opportunity(self, intent):
-        """创建机会；名称与所属客户为必填，初始阶段为初步接触。"""
+        """Create an opportunity; name and owning customer are required, initial stage is "initial contact"."""
         name = intent.get("name")
         customer_id = intent.get("customer_id")
         amount = intent.get("amount") or 0
         close_date = intent.get("close_date")
 
         if not name:
-            name = self._ask("请输入机会名称：") or None
+            name = self._ask("Enter the opportunity name: ") or None
             if not name:
-                return [self._err("❌ 缺少机会名称，已取消。")]
+                return [self._err("❌ Missing opportunity name; cancelled.")]
         if customer_id is None:
-            ans = self._ask("请输入关联客户ID：")
+            ans = self._ask("Enter the associated customer ID: ")
             customer_id = int(ans) if ans.isdigit() else None
         if customer_id is None or not self._get_customer(customer_id):
-            return [self._err(f"❌ 客户 #{customer_id} 不存在，无法创建机会。")]
+            return [self._err(f"❌ Customer #{customer_id} does not exist; cannot create opportunity.")]
 
         self.db.execute(
             "INSERT INTO opportunities (customer_id, name, amount, stage, "
@@ -1435,11 +1474,11 @@ class CRMAgent:
              datetime.now().strftime("%Y-%m-%d %H:%M")),
         )
         oid = self.db.query_one("SELECT last_insert_rowid() id")["id"]
-        return [self._ok(f"✅ 已创建机会 #{oid}：{name}，金额 {amount:,.0f}，"
-                         f"阶段「初步接触」，关联客户 #{customer_id}")]
+        return [self._ok(f"✅ Created opportunity #{oid}: {name}, amount {amount:,.0f}, "
+                         f"stage \"{STAGE_LABELS['initial_contact']}\", associated customer #{customer_id}")]
 
     def list_opportunities(self, _intent):
-        """查看所有机会，按阶段分组展示（每个阶段一个表格块）。"""
+        """View all opportunities, grouped by stage (one table block per stage)."""
         order = ["initial_contact", "needs_analysis", "proposal",
                  "negotiation", "won", "lost"]
         blocks = []
@@ -1455,124 +1494,124 @@ class CRMAgent:
                 continue
             subtotal = sum(r["amount"] or 0 for r in rows)
             blocks.append(self._table(
-                f"💼 {STAGE_LABELS[stage]}（{len(rows)} 个，合计 {subtotal:,.0f}）",
-                ["ID", "机会名称", "客户", "金额", "预计关闭", "关闭原因"],
+                f"💼 {STAGE_LABELS[stage]} ({len(rows)}, total {subtotal:,.0f})",
+                ["ID", "Opportunity", "Customer", "Amount", "Expected Close", "Close Reason"],
                 [[r["id"], r["name"], r["cust"], f"{r['amount'] or 0:,.0f}",
                   r["close_date"], r["closed_reason"]] for r in rows],
             ))
         if not blocks:
-            return [self._info("（暂无机会记录）")]
+            return [self._info("(no opportunity records yet)")]
         return blocks
 
     def _get_opp(self, oid):
-        """按 ID 取机会行。"""
+        """Fetch the opportunity row by ID."""
         return self.db.query_one("SELECT * FROM opportunities WHERE id=?", (oid,))
 
     def update_opp_stage(self, intent):
-        """推进/更新机会阶段。"""
+        """Advance/update the opportunity stage."""
         oid, stage = intent["id"], intent["stage"]
         if not self._get_opp(oid):
-            return [self._err(f"❌ 机会 #{oid} 不存在。")]
+            return [self._err(f"❌ Opportunity #{oid} does not exist.")]
         self.db.execute(
             "UPDATE opportunities SET stage=? WHERE id=?", (stage, oid)
         )
-        return [self._ok(f"✅ 机会 #{oid} 阶段已更新为「{STAGE_LABELS[stage]}」。")]
+        return [self._ok(f"✅ Opportunity #{oid} stage updated to \"{STAGE_LABELS[stage]}\".")]
 
     def update_opp_amount(self, intent):
-        """修改机会金额。"""
+        """Modify the opportunity amount."""
         oid, amount = intent["id"], intent["amount"]
         if not self._get_opp(oid):
-            return [self._err(f"❌ 机会 #{oid} 不存在。")]
+            return [self._err(f"❌ Opportunity #{oid} does not exist.")]
         self.db.execute(
             "UPDATE opportunities SET amount=? WHERE id=?", (amount, oid)
         )
-        return [self._ok(f"✅ 机会 #{oid} 金额已更新为 {amount:,.0f}。")]
+        return [self._ok(f"✅ Opportunity #{oid} amount updated to {amount:,.0f}.")]
 
     def update_opp_date(self, intent):
-        """修改机会预计关闭日期。"""
+        """Modify the opportunity's expected close date."""
         oid, date = intent["id"], intent["close_date"]
         if not self._get_opp(oid):
-            return [self._err(f"❌ 机会 #{oid} 不存在。")]
+            return [self._err(f"❌ Opportunity #{oid} does not exist.")]
         self.db.execute(
             "UPDATE opportunities SET close_date=? WHERE id=?", (date, oid)
         )
-        return [self._ok(f"✅ 机会 #{oid} 预计关闭日期已更新为 {date}。")]
+        return [self._ok(f"✅ Opportunity #{oid} expected close date updated to {date}.")]
 
     def close_opportunity(self, intent):
-        """关闭机会（赢单/输单），记录关闭原因。"""
+        """Close an opportunity (won/lost), recording the close reason."""
         oid = intent["id"]
         result = intent.get("result")
         reason = intent.get("reason")
         if not self._get_opp(oid):
-            return [self._err(f"❌ 机会 #{oid} 不存在。")]
+            return [self._err(f"❌ Opportunity #{oid} does not exist.")]
         if result not in ("won", "lost"):
-            ans = self._ask("赢单还是输单？（赢单/输单）")
-            if "赢" in ans or "成交" in ans:
+            ans = self._ask("Won or lost? (won/lost)").lower()
+            if "won" in ans or "win" in ans:
                 result = "won"
-            elif "输" in ans or "丢" in ans or "失败" in ans:
+            elif "lost" in ans or "lose" in ans or "fail" in ans:
                 result = "lost"
             else:
-                return [self._err("❌ 未指明赢单/输单。示例：关闭机会2 赢单 价格合适")]
+                return [self._err("❌ Did not specify won/lost. Example: close opportunity 2 won good price")]
         if not reason:
-            reason = self._ask("请输入关闭原因（可回车跳过）：") or None
+            reason = self._ask("Enter the close reason (press Enter to skip): ") or None
         self.db.execute(
             "UPDATE opportunities SET stage=?, closed_reason=?, close_date=? "
             "WHERE id=?",
             (result, reason, datetime.now().strftime("%Y-%m-%d"), oid),
         )
-        return [self._ok(f"✅ 机会 #{oid} 已关闭为「{STAGE_LABELS[result]}」"
-                         + (f"，原因：{reason}" if reason else "") + "。")]
+        return [self._ok(f"✅ Opportunity #{oid} closed as \"{STAGE_LABELS[result]}\""
+                         + (f", reason: {reason}" if reason else "") + ".")]
 
     def delete_opportunity(self, intent):
-        """删除机会（二次确认）。"""
+        """Delete an opportunity (with confirmation)."""
         oid = intent["id"]
         opp = self._get_opp(oid)
         if not opp:
-            return [self._err(f"❌ 机会 #{oid} 不存在。")]
-        if not self._confirm(f"确认删除机会 #{oid}「{opp['name']}」？"):
-            return [self._info("已取消删除。")]
+            return [self._err(f"❌ Opportunity #{oid} does not exist.")]
+        if not self._confirm(f"Confirm deleting opportunity #{oid} \"{opp['name']}\"?"):
+            return [self._info("Deletion cancelled.")]
         self.db.execute("DELETE FROM opportunities WHERE id=?", (oid,))
-        return [self._ok(f"🗑️ 已删除机会 #{oid}「{opp['name']}」。")]
+        return [self._ok(f"🗑️ Deleted opportunity #{oid} \"{opp['name']}\".")]
 
     # ==========================================================================
-    # 任务 / 跟进管理
+    # Task / follow-up management
     # ==========================================================================
     def add_task(self, intent):
-        """创建任务，关联客户或机会。"""
+        """Create a task, associated with a customer or opportunity."""
         related_type = intent.get("related_type")
         related_id = intent.get("related_id")
         description = intent.get("description")
         due_date = intent.get("due_date")
 
         if not description:
-            description = self._ask("请输入任务内容：") or None
+            description = self._ask("Enter the task content: ") or None
             if not description:
-                return [self._err("❌ 缺少任务内容，已取消。")]
+                return [self._err("❌ Missing task content; cancelled.")]
         if related_id is None:
-            ans = self._ask("请输入关联对象ID（客户或机会）：")
+            ans = self._ask("Enter the associated object ID (customer or opportunity): ")
             related_id = int(ans) if ans.isdigit() else None
 
-        # 校验关联对象存在
+        # Validate that the associated object exists
         if related_type == "customer" and related_id is not None:
             if not self._get_customer(related_id):
-                return [self._err(f"❌ 客户 #{related_id} 不存在。")]
+                return [self._err(f"❌ Customer #{related_id} does not exist.")]
         if related_type == "opportunity" and related_id is not None:
             if not self._get_opp(related_id):
-                return [self._err(f"❌ 机会 #{related_id} 不存在。")]
+                return [self._err(f"❌ Opportunity #{related_id} does not exist.")]
 
         self.db.execute(
             "INSERT INTO tasks (related_type, related_id, description, due_date, status)"
             " VALUES (?,?,?,?,?)",
-            (related_type, related_id, description, due_date, "待办"),
+            (related_type, related_id, description, due_date, "todo"),
         )
         tid = self.db.query_one("SELECT last_insert_rowid() id")["id"]
-        rel_label = "客户" if related_type == "customer" else "机会"
-        return [self._ok(f"✅ 已创建任务 #{tid}：{description}"
-                         + (f"（截止 {due_date}）" if due_date else "")
-                         + f"，关联{rel_label} #{related_id}")]
+        rel_label = "customer" if related_type == "customer" else "opportunity"
+        return [self._ok(f"✅ Created task #{tid}: {description}"
+                         + (f" (due {due_date})" if due_date else "")
+                         + f", associated {rel_label} #{related_id}")]
 
     def list_tasks(self, intent):
-        """列出任务；可按状态、关联客户/机会筛选。"""
+        """List tasks; optionally filter by status and associated customer/opportunity."""
         status = intent.get("status")
         cid = intent.get("customer_id")
         oid = intent.get("opportunity_id")
@@ -1594,58 +1633,58 @@ class CRMAgent:
         sql += " ORDER BY status DESC, due_date"
         rows = self.db.query(sql, tuple(params))
 
-        title = "📌 未完成任务" if status == "待办" else "📌 任务列表"
+        title = "📌 Open Tasks" if status == "todo" else "📌 Task List"
         return [self._table(
             title,
-            ["ID", "关联", "内容", "截止日期", "状态"],
+            ["ID", "Associated", "Content", "Due Date", "Status"],
             [[r["id"],
-              ("客户#" if r["related_type"] == "customer" else "机会#")
+              ("customer#" if r["related_type"] == "customer" else "opportunity#")
               + str(r["related_id"]),
               r["description"], r["due_date"], r["status"]] for r in rows],
         )]
 
     def complete_task(self, intent):
-        """标记任务完成。"""
+        """Mark a task as completed."""
         tid = intent["id"]
         row = self.db.query_one("SELECT description, status FROM tasks WHERE id=?", (tid,))
         if not row:
-            return [self._err(f"❌ 任务 #{tid} 不存在。")]
-        if row["status"] == "已完成":
-            return [self._info(f"ℹ️ 任务 #{tid} 已是完成状态。")]
-        self.db.execute("UPDATE tasks SET status='已完成' WHERE id=?", (tid,))
-        return [self._ok(f"✅ 任务 #{tid}「{row['description']}」已标记为完成。")]
+            return [self._err(f"❌ Task #{tid} does not exist.")]
+        if row["status"] == "done":
+            return [self._info(f"ℹ️ Task #{tid} is already completed.")]
+        self.db.execute("UPDATE tasks SET status='done' WHERE id=?", (tid,))
+        return [self._ok(f"✅ Task #{tid} \"{row['description']}\" marked as completed.")]
 
     def delete_task(self, intent):
-        """删除任务（二次确认）。"""
+        """Delete a task (with confirmation)."""
         tid = intent["id"]
         row = self.db.query_one("SELECT description FROM tasks WHERE id=?", (tid,))
         if not row:
-            return [self._err(f"❌ 任务 #{tid} 不存在。")]
-        if not self._confirm(f"确认删除任务 #{tid}「{row['description']}」？"):
-            return [self._info("已取消删除。")]
+            return [self._err(f"❌ Task #{tid} does not exist.")]
+        if not self._confirm(f"Confirm deleting task #{tid} \"{row['description']}\"?"):
+            return [self._info("Deletion cancelled.")]
         self.db.execute("DELETE FROM tasks WHERE id=?", (tid,))
-        return [self._ok(f"🗑️ 已删除任务 #{tid}。")]
+        return [self._ok(f"🗑️ Deleted task #{tid}.")]
 
 
 # ==============================================================================
-# Web 前端：标准库 http.server，提供聊天式交互界面 + /api/command 接口
+# Web frontend: standard-library http.server, provides a chat-style UI + /api/command endpoint
 # ==============================================================================
 def run_web(host="127.0.0.1", port=6001):
     """
-    启动本地 Web 服务：GET / 返回聊天页面，POST /api/command 执行命令。
-    复用 CRMAgent（interactive=False）的全部业务逻辑，结果以 JSON 块返回。
-    采用单线程 HTTPServer，避免 SQLite 跨线程问题。
+    Start a local web service: GET / returns the chat page, POST /api/command runs a command.
+    Reuses all of CRMAgent's business logic (interactive=False); results are returned as JSON blocks.
+    Uses a single-threaded HTTPServer to avoid cross-thread SQLite issues.
     """
     import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    agent = CRMAgent(interactive=False)  # Web 模式：不走 input() 追问
+    agent = CRMAgent(interactive=False)  # Web mode: no input() prompting
 
     class Handler(BaseHTTPRequestHandler):
-        """处理页面与 API 请求。"""
+        """Handle page and API requests."""
 
         def _send(self, code, body, content_type="application/json; charset=utf-8"):
-            """统一发送响应。"""
+            """Send a response uniformly."""
             data = body.encode("utf-8") if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", content_type)
@@ -1654,7 +1693,7 @@ def run_web(host="127.0.0.1", port=6001):
             self.wfile.write(data)
 
         def do_GET(self):
-            """返回前端页面 / skill 列表。"""
+            """Return the frontend page / skill list."""
             if self.path in ("/", "/index.html"):
                 self._send(200, INDEX_HTML, "text/html; charset=utf-8")
             elif self.path == "/api/skill/list":
@@ -1666,7 +1705,7 @@ def run_web(host="127.0.0.1", port=6001):
                 self._send(404, "Not Found", "text/plain; charset=utf-8")
 
         def _body(self):
-            """读取并解码请求体为 dict。"""
+            """Read and decode the request body into a dict."""
             length = int(self.headers.get("Content-Length", 0))
             data = self.rfile.read(length) if length else b"{}"
             for enc in ("utf-8", "gbk"):
@@ -1681,7 +1720,7 @@ def run_web(host="127.0.0.1", port=6001):
                 return {}
 
         def do_POST(self):
-            """执行命令 / 上传 skill。"""
+            """Run a command / upload a skill."""
             if self.path == "/api/skill/upload":
                 payload = self._body()
                 res = agent.skills.submit(
@@ -1699,32 +1738,32 @@ def run_web(host="127.0.0.1", port=6001):
             self._send(200, json.dumps({"blocks": blocks}, ensure_ascii=False))
 
         def log_message(self, *_args):
-            """静默访问日志，保持控制台干净。"""
+            """Silence the access log to keep the console clean."""
             return
 
     server = HTTPServer((host, port), Handler)
     print("=" * 60)
-    print(f" 🌐  CRM-Agent Web 已启动 -> http://{host}:{port}")
-    print("     在浏览器打开上面的地址即可对话，Ctrl+C 停止")
+    print(f" 🌐  CRM-Agent Web started -> http://{host}:{port}")
+    print("     Open the address above in a browser to chat; Ctrl+C to stop")
     print("=" * 60)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n已停止 Web 服务。")
+        print("\nWeb service stopped.")
     finally:
         server.server_close()
         agent.db.close()
 
 
 # ------------------------------------------------------------------------------
-# 前端页面（单页 HTML，内联 CSS/JS，零外部依赖）
+# Frontend page (single-page HTML, inline CSS/JS, zero external dependencies)
 # ------------------------------------------------------------------------------
 INDEX_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CRM-Agent · 自然语言客户管理</title>
+<title>CRM-Agent - Natural-Language Customer Management</title>
 <style>
   :root {
     --bg: #0f172a; --panel: #1e293b; --panel2: #273449;
@@ -1737,7 +1776,7 @@ INDEX_HTML = """<!DOCTYPE html>
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
     background: radial-gradient(1200px 600px at 80% -10%, #1e1b4b 0%, var(--bg) 55%);
   }
-  /* 侧栏：命令示例 */
+  /* Sidebar: command examples */
   #side {
     width: 290px; flex-shrink: 0; background: rgba(15,23,42,.6);
     border-right: 1px solid var(--line); padding: 20px 16px; overflow-y: auto;
@@ -1754,7 +1793,7 @@ INDEX_HTML = """<!DOCTYPE html>
     transition: .15s; line-height: 1.4;
   }
   .chip:hover { border-color: var(--brand); background: var(--panel2); transform: translateX(2px); }
-  /* 主区 */
+  /* Main area */
   #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #top { padding: 16px 24px; border-bottom: 1px solid var(--line);
     display: flex; align-items: center; justify-content: space-between; }
@@ -1770,13 +1809,13 @@ INDEX_HTML = """<!DOCTYPE html>
     border-bottom-left-radius: 4px; }
   .bot .bubble.ok { border-left: 3px solid var(--ok); }
   .bot .bubble.err { border-left: 3px solid var(--err); }
-  /* 表格 */
+  /* Tables */
   .tbl-title { font-weight: 600; margin: 2px 0 8px; font-size: 13.5px; color: var(--txt); }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
   th { background: var(--panel2); color: var(--muted); font-weight: 600; }
   tr:nth-child(even) td { background: rgba(255,255,255,.02); }
-  /* 概览卡片 */
+  /* Overview cards */
   .stats { display: flex; flex-wrap: wrap; gap: 10px; }
   .stat { flex: 1; min-width: 110px; background: var(--panel2); border: 1px solid var(--line);
     border-radius: 12px; padding: 12px 14px; }
@@ -1784,7 +1823,7 @@ INDEX_HTML = """<!DOCTYPE html>
     background: linear-gradient(135deg, #a5b4fc, #c4b5fd); -webkit-background-clip: text;
     -webkit-text-fill-color: transparent; }
   .stat .l { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  /* 输入区 */
+  /* Input area */
   #bar { padding: 16px 24px; border-top: 1px solid var(--line); display: flex; gap: 10px; }
   #inp { flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--txt);
     border-radius: 12px; padding: 12px 14px; font-size: 14px; outline: none; }
@@ -1793,7 +1832,7 @@ INDEX_HTML = """<!DOCTYPE html>
     font-size: 14px; font-weight: 600;
     background: linear-gradient(135deg, var(--brand), var(--brand2)); }
   #send:disabled { opacity: .5; cursor: default; }
-  /* Skill 管理弹窗 */
+  /* Skill management modal */
   #mask { position: fixed; inset: 0; background: rgba(2,6,23,.66); display: none;
     align-items: center; justify-content: center; z-index: 50; }
   #mask.show { display: flex; }
@@ -1833,57 +1872,57 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
   <aside id="side">
     <div class="brand"><span class="dot">🤝</span> CRM-Agent</div>
-    <h2>客户</h2>
-    <button class="chip">添加客户 张三 北京XX科技 13800000000 zhang@x.com 北京朝阳</button>
-    <button class="chip">显示所有客户</button>
-    <button class="chip">查找客户 张三</button>
-    <h2>联系人</h2>
-    <button class="chip">添加联系人 李四 客户ID=1 职位销售经理 电话13900000000</button>
-    <button class="chip">客户1的联系人</button>
-    <h2>销售机会</h2>
-    <button class="chip">创建机会 年度采购项目 客户ID=1 金额50000</button>
-    <button class="chip">将机会1推进到谈判</button>
-    <button class="chip">显示所有机会</button>
-    <button class="chip">关闭机会1 赢单 价格合适</button>
-    <h2>任务</h2>
-    <button class="chip">添加任务 客户1 回访客户确认需求 截止2026-06-10</button>
-    <button class="chip">显示未完成任务</button>
-    <button class="chip">完成任务1</button>
-    <h2>其他</h2>
-    <button class="chip">显示概览</button>
+    <h2>Customers</h2>
+    <button class="chip">add customer Acme Acme Corp 13800000000 zhang@x.com Beijing Chaoyang</button>
+    <button class="chip">show customers</button>
+    <button class="chip">find customer Acme</button>
+    <h2>Contacts</h2>
+    <button class="chip">add contact John customer=1 title=Sales Manager phone=13900000000</button>
+    <button class="chip">contacts of customer 1</button>
+    <h2>Opportunities</h2>
+    <button class="chip">create opportunity Annual Purchase customer=1 amount=50000</button>
+    <button class="chip">advance opportunity 1 to negotiation</button>
+    <button class="chip">show opportunities</button>
+    <button class="chip">close opportunity 1 won good price</button>
+    <h2>Tasks</h2>
+    <button class="chip">add task customer 1 follow up to confirm needs due 2026-06-10</button>
+    <button class="chip">show open tasks</button>
+    <button class="chip">complete task 1</button>
+    <h2>Other</h2>
+    <button class="chip">show dashboard</button>
     <button class="chip">help</button>
-    <h2>Skill 扩展</h2>
-    <button class="chip" onclick="openSkill()">🧩 管理 / 上传 Skill</button>
-    <button class="chip">显示skill</button>
+    <h2>Skill Extensions</h2>
+    <button class="chip" onclick="openSkill()">🧩 Manage / Upload Skill</button>
+    <button class="chip">show skills</button>
   </aside>
 
   <main id="main">
     <div id="top">
-      <div><strong>自然语言 CRM 助手</strong>
-        <span class="sub">· 输入指令即可管理客户 / 联系人 / 机会 / 任务</span></div>
-      <div class="sub">SQLite 本地存储</div>
+      <div><strong>Natural-Language CRM Assistant</strong>
+        <span class="sub">· type a command to manage customers / contacts / opportunities / tasks</span></div>
+      <div class="sub">SQLite local storage</div>
     </div>
     <div id="log"></div>
     <div id="bar">
-      <input id="inp" placeholder="例如：添加客户 王五 上海ABC 13700000000 / 显示概览" autofocus>
-      <button id="send" onclick="send()">发送</button>
+      <input id="inp" placeholder="e.g.: add customer Globex Globex Inc 13700000000 / show dashboard" autofocus>
+      <button id="send" onclick="send()">Send</button>
     </div>
   </main>
 
   <div id="mask" onclick="if(event.target===this)closeSkill()">
     <div id="skillbox">
       <div class="sk-head">
-        <strong>🧩 Skill 管理</strong>
-        <span class="sub">上传声明式 skill 优化 Agent · 先过安全扫描，benign 才装载</span>
+        <strong>🧩 Skill Management</strong>
+        <span class="sub">Upload declarative skills to improve the Agent · security-scanned first, only benign ones are loaded</span>
         <button class="sk-x" onclick="closeSkill()">✕</button>
       </div>
       <div class="sk-body">
-        <label>名称</label>
-        <input id="sk-name" placeholder="例如 退款助手">
-        <label>Manifest（JSON）<button class="sk-mini" onclick="fillSample()">填入示例</button></label>
+        <label>Name</label>
+        <input id="sk-name" placeholder="e.g. Refund Helper">
+        <label>Manifest (JSON)<button class="sk-mini" onclick="fillSample()">Fill sample</button></label>
         <textarea id="sk-content" spellcheck="false"
-          placeholder='{"name":"退款助手","rules":[{"triggers":["退款"],"respond":"退款流程：……"}]}'></textarea>
-        <button id="sk-up" onclick="uploadSkill()">上传并扫描</button>
+          placeholder='{"name":"Refund Helper","rules":[{"triggers":["refund"],"respond":"Refund process: ..."}]}'></textarea>
+        <button id="sk-up" onclick="uploadSkill()">Upload and scan</button>
         <div id="sk-msg"></div>
         <div id="sk-list"></div>
       </div>
@@ -1895,7 +1934,7 @@ const log = document.getElementById('log');
 const inp = document.getElementById('inp');
 const btn = document.getElementById('send');
 
-// HTML 转义，避免数据里的尖括号破坏页面
+// HTML-escape to prevent angle brackets in the data from breaking the page
 function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
@@ -1905,10 +1944,10 @@ function addUser(text){
   log.appendChild(row); log.scrollTop = log.scrollHeight;
 }
 
-// 把后端返回的结果块渲染成气泡
+// Render the result blocks returned by the backend into bubbles
 function addBlocks(blocks){
   if(!blocks || !blocks.length){
-    blocks = [{kind:'text', text:'（无输出）', tone:'info'}];
+    blocks = [{kind:'text', text:'(no output)', tone:'info'}];
   }
   blocks.forEach(b => {
     const row = document.createElement('div'); row.className = 'row bot';
@@ -1928,7 +1967,7 @@ function addBlocks(blocks){
 
 function renderTable(b){
   let h = '<div class="tbl-title">'+esc(b.title||'')+'</div>';
-  if(!b.rows || !b.rows.length) return h + '<div style="color:#94a3b8">（没有匹配的记录）</div>';
+  if(!b.rows || !b.rows.length) return h + '<div style="color:#94a3b8">(no matching records)</div>';
   h += '<table><thead><tr>';
   b.headers.forEach(x => h += '<th>'+esc(x)+'</th>');
   h += '</tr></thead><tbody>';
@@ -1947,9 +1986,9 @@ async function send(){
   const text = inp.value.trim();
   if(!text) return;
   addUser(text); inp.value = ''; btn.disabled = true;
-  // 删除类操作前端先确认一次（后端在 Web 模式下默认放行）
-  if(/^(删除|移除)/.test(text) && !confirm('确认执行：「'+text+'」？此操作不可撤销')){
-    addBlocks([{kind:'text', text:'已取消删除。', tone:'info'}]);
+  // Confirm delete operations on the frontend first (the backend passes them by default in Web mode)
+  if(/^(delete|remove)/i.test(text) && !confirm('Confirm executing: "'+text+'"? This cannot be undone')){
+    addBlocks([{kind:'text', text:'Deletion cancelled.', tone:'info'}]);
     btn.disabled = false; inp.focus(); return;
   }
   try{
@@ -1960,33 +1999,33 @@ async function send(){
     const data = await resp.json();
     addBlocks(data.blocks);
   }catch(e){
-    addBlocks([{kind:'text', text:'请求失败：'+e, tone:'err'}]);
+    addBlocks([{kind:'text', text:'Request failed: '+e, tone:'err'}]);
   }finally{
     btn.disabled = false; inp.focus();
   }
 }
 
-// 侧栏示例：点击即填入输入框
+// Sidebar examples: click to fill the input box
 document.querySelectorAll('.chip').forEach(c =>
   c.addEventListener('click', () => { inp.value = c.textContent; inp.focus(); }));
 inp.addEventListener('keydown', e => { if(e.key === 'Enter') send(); });
 
-// 开场白
+// Opening greeting
 addBlocks([{kind:'text', tone:'info',
-  text:'👋 你好！我是 CRM-Agent。用自然语言告诉我要做什么，'
-       +'或点击左侧示例快速开始。输入 help 查看全部用法。'}]);
+  text:'👋 Hello! I am CRM-Agent. Tell me what to do in natural language, '
+       +'or click an example on the left to get started quickly. Type help to see all usages.'}]);
 
-// ---- Skill 管理弹窗 ----
+// ---- Skill management modal ----
 const mask = document.getElementById('mask');
 function openSkill(){ mask.classList.add('show'); loadSkills(); }
 function closeSkill(){ mask.classList.remove('show'); }
 function fillSample(){
-  document.getElementById('sk-name').value = '退款助手';
+  document.getElementById('sk-name').value = 'Refund Helper';
   document.getElementById('sk-content').value = JSON.stringify({
-    name:'退款助手', version:'1.0', description:'认识退款相关说法并答复',
+    name:'Refund Helper', version:'1.0', description:'Recognize refund-related phrasings and reply',
     rules:[
-      {triggers:['退款','怎么退款','退货流程'], respond:'退款流程：1) 在机会中标记输单原因；2) 联系财务发起退款；3) 同步更新客户备注。'},
-      {triggers:['大客户','vip客户'], action:'list_customers'}
+      {triggers:['refund','how to refund','return process'], respond:'Refund process: 1) mark the lost reason on the opportunity; 2) contact finance to initiate the refund; 3) update the customer notes.'},
+      {triggers:['big customer','vip customer'], action:'list_customers'}
     ]
   }, null, 2);
 }
@@ -1995,20 +2034,20 @@ async function loadSkills(){
     const r = await fetch('/api/skill/list'); const d = await r.json();
     let h = '';
     (d.installed||[]).forEach(s => h += '<div class="item"><span>📦 '+esc(s.name)
-      +' <span style="color:#94a3b8">· '+s.rules+' 规则</span></span>'
-      +'<span class="badge b-ok">已装载</span></div>');
+      +' <span style="color:#94a3b8">· '+s.rules+' rules</span></span>'
+      +'<span class="badge b-ok">loaded</span></div>');
     (d.quarantined||[]).forEach(s => h += '<div class="item"><span>🚫 '+esc(s.name)
       +' <span style="color:#94a3b8">· '+esc(s.evidence||'')+'</span></span>'
       +'<span class="badge '+(s.verdict==='malicious'?'b-bad':'b-warn')+'">'+esc(s.verdict)+'</span></div>');
-    document.getElementById('sk-list').innerHTML = h || '<span style="color:#94a3b8">暂无 skill</span>';
-  }catch(e){ document.getElementById('sk-list').textContent = '加载列表失败：'+e; }
+    document.getElementById('sk-list').innerHTML = h || '<span style="color:#94a3b8">No skills yet</span>';
+  }catch(e){ document.getElementById('sk-list').textContent = 'Failed to load list: '+e; }
 }
 async function uploadSkill(){
   const name = document.getElementById('sk-name').value.trim();
   const content = document.getElementById('sk-content').value.trim();
   const msg = document.getElementById('sk-msg'); const up = document.getElementById('sk-up');
-  if(!content){ msg.innerHTML = '<span class="bad">请先填写 manifest。</span>'; return; }
-  up.disabled = true; msg.textContent = '扫描中…';
+  if(!content){ msg.innerHTML = '<span class="bad">Please fill in the manifest first.</span>'; return; }
+  up.disabled = true; msg.textContent = 'Scanning…';
   try{
     const r = await fetch('/api/skill/upload', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -2017,12 +2056,12 @@ async function uploadSkill(){
     const d = await r.json();
     const cls = d.ok ? 'ok' : 'bad';
     let line = '<span class="'+cls+'">'+esc(d.message)+'</span>';
-    if(d.evidence) line += '<br><span style="color:#94a3b8">证据：'+esc(d.evidence)+'</span>';
-    if(typeof d.risk_score==='number') line += '<br><span style="color:#94a3b8">判定：'
-      +esc(d.verdict)+' · 风险分 '+d.risk_score+'</span>';
+    if(d.evidence) line += '<br><span style="color:#94a3b8">Evidence: '+esc(d.evidence)+'</span>';
+    if(typeof d.risk_score==='number') line += '<br><span style="color:#94a3b8">Verdict: '
+      +esc(d.verdict)+' · risk score '+d.risk_score+'</span>';
     msg.innerHTML = line;
     loadSkills();
-  }catch(e){ msg.innerHTML = '<span class="bad">上传失败：'+e+'</span>'; }
+  }catch(e){ msg.innerHTML = '<span class="bad">Upload failed: '+e+'</span>'; }
   finally{ up.disabled = false; }
 }
 </script>
@@ -2031,7 +2070,7 @@ async function uploadSkill(){
 
 
 # ==============================================================================
-# 程序入口： python crm_agent.py [web]
+# Program entry point: python crm_agent.py [web]
 # ==============================================================================
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].lower() in ("web", "server", "ui"):

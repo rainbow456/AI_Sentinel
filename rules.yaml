@@ -1,5 +1,6 @@
 - action: block
-  description: 提示词注入：试图用指令覆盖/越权系统提示
+  description: 'Prompt injection: attempts to override system prompt or escalate privileges
+    via instructions'
   enabled: true
   name: prompt_injection
   patterns:
@@ -13,7 +14,8 @@
   rule_id: R001
   severity: high
 - action: block
-  description: 系统指令覆盖：诱导泄露/改写系统指令
+  description: 'System instruction override: tricking the model into leaking or rewriting
+    system instructions'
   enabled: true
   name: system_instruction_override
   patterns:
@@ -26,7 +28,7 @@
   rule_id: R002
   severity: high
 - action: block
-  description: 角色扮演越狱（DAN / act as / 假装你是）
+  description: Role-play jailbreak (DAN / act as / pretend you are)
   enabled: true
   name: role_play
   patterns:
@@ -38,7 +40,8 @@
   rule_id: R003
   severity: high
 - action: block
-  description: Agent间异常协作（共谋）—— 由 disposition 信号触发
+  description: Abnormal collaboration between agents (collusion) -- triggered by disposition
+    signals
   enabled: true
   forbidden_pairs:
   - - tech_support
@@ -50,7 +53,7 @@
   rule_id: R004
   severity: critical
 - action: block
-  description: 高危动作关键词（删除/转账/授权/降级等）
+  description: High-risk action keywords (delete / transfer / grant / escalate, etc.)
   enabled: true
   name: high_risk_action_keyword
   patterns:
@@ -65,7 +68,7 @@
   rule_id: R005
   severity: high
 - action: block
-  description: 破坏性命令（drop table / delete from / rm -rf / truncate）
+  description: Destructive command (drop table / delete from / rm -rf / truncate)
   enabled: true
   name: destructive_command
   patterns:
@@ -79,20 +82,18 @@
   rule_id: R006
   severity: critical
 - action: block
-  description: 敏感文件访问
+  description: 'Created via NL: Add rule: detect sensitive file access, patterns include
+    /etc/shadow/.env/config'
   enabled: true
   name: 敏感文件访问
-  nl_config: 添加规则：检测敏感文件访问，模式包含 /etc/shadow/.env/config，动作 block
+  nl_config: 'Add rule: detect sensitive file access, patterns include /etc/shadow/.env/config,
+    action block'
   patterns:
-  - 含
-  - etc
-  - shadow
-  - .env
-  - config
+  - default_pattern
   rule_id: R007
   severity: high
 - action: block
-  description: 密钥/凭据泄露（API key / token / 私钥）
+  description: Secret / credential leakage (API key / token / private key)
   enabled: true
   name: api_key
   patterns:
@@ -107,7 +108,7 @@
   rule_id: R008
   severity: critical
 - action: alert
-  description: 高熵串：疑似密钥/Token/编码载荷
+  description: 'High-entropy string: suspected key / token / encoded payload'
   enabled: true
   name: high_entropy_blob
   patterns:
@@ -117,7 +118,7 @@
   rule_id: R009
   severity: high
 - action: alert
-  description: PII：邮箱地址
+  description: 'PII: email address'
   enabled: true
   name: pii_email
   patterns:
@@ -125,7 +126,7 @@
   rule_id: R010
   severity: medium
 - action: alert
-  description: PII：电话号码
+  description: 'PII: phone number'
   enabled: true
   name: pii_phone
   patterns:
@@ -133,7 +134,7 @@
   rule_id: R011
   severity: medium
 - action: alert
-  description: PII：URL（presidio 识别）
+  description: 'PII: URL (detected by presidio)'
   enabled: true
   name: pii_url
   patterns:
@@ -141,10 +142,23 @@
   rule_id: R012
   severity: low
 - action: alert
-  description: 多语种混写规避检测
+  description: Multilingual mixed-script evasion detection
   enabled: true
   name: multilingual_evasion
   patterns:
   - multilingual
   rule_id: R013
   severity: medium
+- action: block
+  description: 'SQL injection: UNION read exfiltration / always-true bypass / stacked
+    queries / blind injection'
+  enabled: true
+  name: sql_injection
+  patterns:
+  - sql_injection
+  - union select
+  - or 1=1
+  - ''' or '''
+  - information_schema
+  rule_id: R014
+  severity: critical

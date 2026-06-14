@@ -32,7 +32,7 @@ Custom rules path:
 # Load .env before reading any env vars
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes priority over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -99,7 +99,7 @@ class AppConfig:
     splunk: SplunkConfig = field(default_factory=SplunkConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     rules: RuleEngineConfig = field(default_factory=RuleEngineConfig)
-    poll_interval: int = 10               # Analyst event polling interval in seconds
+    poll_interval: int = 1                # Analyst event polling interval in seconds (1s for fast demo loading)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -165,7 +165,7 @@ def get_config() -> AppConfig:
 
     return AppConfig(
         splunk=splunk, gateway=gateway, rules=rules,
-        poll_interval=_env_int("POLL_INTERVAL", 10),
+        poll_interval=_env_int("POLL_INTERVAL", 1),
     )
 
 

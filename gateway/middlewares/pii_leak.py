@@ -10,7 +10,8 @@ is always available.
 
 import re
 
-# 规则已迁移到 rule_store 规则库，由 middlewares/rule_engine 数据驱动执行。
+# Rules have been migrated to the rule_store rule library and are executed
+# data-driven by middlewares/rule_engine.
 SUPERSEDED = True
 from typing import Dict, Any, List
 
@@ -22,7 +23,7 @@ _BLOCK_ENTITIES = {
     "CRYPTO",
 }
 
-# ---- Presidio 懒加载：首次 detect 才初始化，import 本模块不触发，避免拖慢启动 ----
+# ---- Presidio lazy load: initialized on first detect, not at import time, to avoid slowing startup ----
 _analyzer = None
 _analyzer_ready = False
 

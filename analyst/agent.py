@@ -33,7 +33,7 @@ RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; YELLOW="\033[93m"
 CYAN="\033[96m"; GREEN="\033[92m"; RED="\033[91m"
 
 def _ts(): return f"{DIM}[{datetime.now().strftime('%H:%M:%S')}]{RESET}"
-def _think(msg): print(f"{_ts()} {CYAN}🧠 思考{RESET} {msg}")
+def _think(msg): print(f"{_ts()} {CYAN}🧠 Thinking{RESET} {msg}")
 def _step(emoji, msg): print(f"{_ts()} {emoji} {BOLD}{msg}{RESET}")
 def _divider(c="─", w=62): print(f"{DIM}{c * w}{RESET}")
 
@@ -44,9 +44,9 @@ def _divider(c="─", w=62): print(f"{DIM}{c * w}{RESET}")
 class SecurityAgent:
     """Multi-alert security agent with dual-mode operation & NL command support."""
 
-    LLM_SPL_PROMPT = "你是一个Splunk搜索专家。将用户的自然语言查询转换为SPL查询。\n字段: timestamp, event_type(blocked|passed|action_confirmation), user_input, detection_result.rule_triggered\n示例: '过去1小时的SQL注入告警' → search index=main event_type=blocked \"sql injection\" earliest=-1h\n查询: {query}\n只输出SPL。"
-    LLM_INTENT_PROMPT = "判断意图(query/action/rules_search/mode_switch): {query}"
-    LLM_ACTION_PROMPT = "解析为JSON: {{\"action_type\":\"block|unblock|toggle_rule\",\"target\":\"...\",\"params\":{{...}}}}\n输入: {query}"
+    LLM_SPL_PROMPT = "You are a Splunk search expert. Convert the user's natural-language query into an SPL query.\nFields: timestamp, event_type(blocked|passed|action_confirmation), user_input, detection_result.rule_triggered\nExample: 'SQL injection alerts in the last hour' → search index=main event_type=blocked \"sql injection\" earliest=-1h\nQuery: {query}\nOutput only the SPL."
+    LLM_INTENT_PROMPT = "Classify the intent (query/action/rules_search/mode_switch): {query}"
+    LLM_ACTION_PROMPT = "Parse into JSON: {{\"action_type\":\"block|unblock|toggle_rule\",\"target\":\"...\",\"params\":{{...}}}}\nInput: {query}"
 
     def __init__(self, mode: AgentMode = AgentMode.OBSERVE):
         self.mode = mode
@@ -63,20 +63,22 @@ class SecurityAgent:
         self._running = True
         self._processed_event_ids: set[str] = set()
         self._lock = threading.Lock()
-        # Auto-enable the Claude-backed NL path when ANTHROPIC_API_KEY is present,
-        # so NL→SPL / intent classification work out of the box (no UI config call
-        # needed). The actual HTTP call lives in analyst/llm_client.py.
+        # Auto-enable the NL path (NL→SPL / intent classification) when an LLM key
+        # is configured for the active provider (anthropic / deepseek / openai).
+        # Provider-aware via analyst/llm_client (which holds the actual HTTP call).
         self._llm_config: dict = {}
-        _llm_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        if _llm_key:
-            self._llm_config = {
-                "provider": os.getenv("LLM_PROVIDER", "anthropic"),
-                "api_key": _llm_key,
-                "model": (os.getenv("ANALYST_LLM_MODEL")
-                          or os.getenv("LLM_DETECT_MODEL")
-                          or "claude-opus-4-8").strip(),
-            }
-            print(f"{_ts()} 🔧 LLM 已启用: {self._llm_config['model']}")
+        try:
+            from . import llm_client
+            if llm_client.is_enabled():
+                self._llm_config = {
+                    "provider": llm_client._provider(),
+                    "api_key": llm_client._api_key(),
+                    "model": llm_client._model(),
+                }
+                print(f"{_ts()} 🔧 LLM enabled: provider={self._llm_config['provider']} "
+                      f"model={self._llm_config['model']}")
+        except Exception:
+            pass
         # Polling state (replaces _demo_cycle)
         self._poll_thread: threading.Thread | None = None
         self._poll_interval: int = self._config.poll_interval
@@ -93,12 +95,49 @@ class SecurityAgent:
     def set_mode(self, mode: AgentMode):
         old = self.mode
         self.mode = mode
-        print(f"{_ts()} 🔄 模式切换: {old.value} → {BOLD}{mode.value}{RESET}")
+        print(f"{_ts()} 🔄 Mode switch: {old.value} → {BOLD}{mode.value}{RESET}")
+        # AUTO takeover: switching INTO auto hands disposition to the AI. The AI
+        # auto-disposes the existing pending/held backlog in a background thread so
+        # the mode-switch call stays responsive; each becomes a disposition record
+        # with operator="auto" (AI auto-handled).
+        if mode == AgentMode.AUTO and old != AgentMode.AUTO:
+            threading.Thread(target=self._auto_sweep_pending, daemon=True).start()
+
+    def _auto_sweep_pending(self) -> int:
+        """AUTO takeover: AI auto-disposes every currently pending/held alert.
+        Held alerts go through apply_disposition (AI recommendation + resolve hold);
+        plain pending-block alerts go through execute_disposition. Each is recorded
+        with operator="auto" so the disposition page shows "AI AUTO-HANDLED"."""
+        with self._lock:
+            target_ids = [a.alert_id for a in self.alerts
+                          if not a.handled and (a.held or a.pending_block)]
+        if not target_ids:
+            return 0
+        print(f"{_ts()} 🤖 AUTO takeover: AI auto-handling {len(target_ids)} pending alert(s)...")
+        done = 0
+        for aid in target_ids:
+            # Stop early if the operator flipped back to OBSERVE mid-sweep.
+            if self.mode != AgentMode.AUTO:
+                break
+            with self._lock:
+                a = next((x for x in self.alerts if x.alert_id == aid), None)
+            if a is None or a.handled:
+                continue
+            try:
+                if a.held:
+                    self.apply_disposition(aid, selections=None, operator="auto")
+                else:
+                    self.execute_disposition(aid)   # operator resolves to auto (mode is AUTO)
+                done += 1
+            except Exception as e:
+                print(f"{_ts()} {YELLOW}auto-sweep error on {aid}: {e}{RESET}")
+        print(f"{_ts()} 🤖 AUTO takeover complete: {done} alert(s) auto-handled by AI.")
+        return done
 
     def configure_llm(self, provider: str, api_key: str, model: str = ""):
         self._llm_config = {"provider": provider, "api_key": api_key,
                             "model": model or "claude-sonnet-4-6"}
-        print(f"{_ts()} 🔧 LLM已配置: {provider}/{self._llm_config['model']}")
+        print(f"{_ts()} 🔧 LLM configured: {provider}/{self._llm_config['model']}")
 
     # ── MCP integration ────────────────────────────────────────────────
 
@@ -110,12 +149,12 @@ class SecurityAgent:
             if ok:
                 connected = [n for n in ["splunk-query", "gateway-control", "rule-engine"]
                             if self._mcp.is_connected(n)]
-                print(f"{_ts()} 🔌 MCP已连接: {', '.join(connected)}")
+                print(f"{_ts()} 🔌 MCP connected: {', '.join(connected)}")
                 self._sync_rules_from_mcp()
             else:
-                print(f"{_ts()} {YELLOW}⚠ MCP连接部分失败{RESET}")
+                print(f"{_ts()} {YELLOW}⚠ MCP connection partially failed{RESET}")
         except Exception as e:
-            print(f"{_ts()} {YELLOW}⚠ MCP初始化失败: {e}{RESET}")
+            print(f"{_ts()} {YELLOW}⚠ MCP initialization failed: {e}{RESET}")
             self._mcp_enabled = False
 
     def _sync_rules_from_mcp(self):
@@ -129,9 +168,9 @@ class SecurityAgent:
                     rd = r.get("rule_id", "")
                     if rd in self.rule_engine.rules:
                         self.rule_engine.rules[rd].enabled = r.get("enabled", True)
-                print(f"{_ts()} 📋 规则已同步: {data.get('total', 0)}条")
+                print(f"{_ts()} 📋 Rules synced: {data.get('total', 0)}")
         except Exception as e:
-            print(f"{_ts()} {YELLOW}⚠ 规则同步失败: {e}{RESET}")
+            print(f"{_ts()} {YELLOW}⚠ Rule sync failed: {e}{RESET}")
 
     def _mcp_call(self, server: str, tool: str, args: dict, fallback=None):
         if not self._mcp_enabled or not self._mcp:
@@ -151,7 +190,7 @@ class SecurityAgent:
             return
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
-        print(f"{_ts()} 🔄 开始轮询 Splunk (间隔={self._poll_interval}s)")
+        print(f"{_ts()} 🔄 Started polling Splunk (interval={self._poll_interval}s)")
 
     def _poll_loop(self):
         """Background loop: poll Splunk for new events every N seconds."""
@@ -167,10 +206,10 @@ class SecurityAgent:
                         with self._lock:
                             self._processed_event_ids.add(event.event_id)
                     if fresh:
-                        print(f"{_ts()} 📥 轮询获得 {len(fresh)} 个新事件 "
-                              f"(总计 {len(self._processed_event_ids)})")
+                        print(f"{_ts()} 📥 Polling fetched {len(fresh)} new events "
+                              f"(total {len(self._processed_event_ids)})")
             except Exception as e:
-                print(f"{_ts()} {YELLOW}⚠ 轮询错误: {e}{RESET}")
+                print(f"{_ts()} {YELLOW}⚠ Polling error: {e}{RESET}")
             for _ in range(self._poll_interval):
                 if not self._running:
                     break
@@ -206,9 +245,9 @@ class SecurityAgent:
         """Handle NL rule configuration (create/edit rules)."""
         config = parse_rule_config(text)
         if config.get("confidence", 0) < 0.5:
-            return {"intent":"rule_config","error":"无法解析规则配置指令","feedback_nl":"⚠️ 无法解析规则配置"}
+            return {"intent":"rule_config","error":"Could not parse rule configuration command","feedback_nl":"⚠️ Could not parse rule configuration"}
         result = self._mcp_call("rule-engine","upsert_rule",{"rule_data":config["rule_data"]}, fallback=None)
-        feedback = format_rule_config_result(config, result) if result else "⚠️ 规则配置失败"
+        feedback = format_rule_config_result(config, result) if result else "⚠️ Rule configuration failed"
         # Sync local
         if result and result.get("success"):
             self.rule_engine.upsert_rule(config["rule_data"])
@@ -216,7 +255,7 @@ class SecurityAgent:
                 "rule_data":config["rule_data"],"result":result,"feedback_nl":feedback}
 
     def process_nl_query(self, query_text: str) -> dict:
-        _think(f"处理自然语言指令: 「{query_text}」")
+        _think(f"Processing natural-language command: 「{query_text}」")
         intent = None
         if self._llm_config.get("api_key"):
             try:
@@ -227,7 +266,7 @@ class SecurityAgent:
         method = "llm" if intent else "keyword"
         if not intent:
             intent = classify_intent(query_text)  # keyword fallback
-        print(f"  {DIM}意图分类({method}): {intent}{RESET}")
+        print(f"  {DIM}Intent classification ({method}): {intent}{RESET}")
         if intent == INTENT_MODE_SWITCH:
             return self._handle_mode_switch(query_text)
         elif intent == INTENT_ACTION:
@@ -276,8 +315,8 @@ class SecurityAgent:
             return {
                 "intent": INTENT_ACTION,
                 "action": action_type,
-                "error": f"无法解析操作指令: 「{query_text}」",
-                "feedback_nl": f"⚠️ 无法识别操作类型。支持: 阻断IP/事件、解封、启用/禁用规则。",
+                "error": f"Could not parse action command: 「{query_text}」",
+                "feedback_nl": f"⚠️ Unrecognized action type. Supported: block IP/event, unblock, enable/disable rule.",
             }
 
         # Check mode: OBSERVE requires confirmation for block
@@ -308,7 +347,7 @@ class SecurityAgent:
                 "action_parsed": action,
                 "mcp_server": mcp_server,
                 "mcp_tool": mcp_tool,
-                "feedback_nl": f"⚠️ OBSERVE模式 — 确认执行: {format_action_result(action, {})}",
+                "feedback_nl": f"⚠️ OBSERVE mode — confirm execution: {format_action_result(action, {})}",
             }
 
         # AUTO mode or non-block action → execute immediately
@@ -316,7 +355,7 @@ class SecurityAgent:
             result_data = self._mcp_call(mcp_server, mcp_tool, params, fallback=None)
 
         feedback = format_action_result(action, result_data) if result_data else \
-                   "⚠️ 操作执行失败，MCP可能未连接。"
+                   "⚠️ Action execution failed; MCP may not be connected."
 
         return {
             "intent": INTENT_ACTION,
@@ -342,7 +381,7 @@ class SecurityAgent:
             return {"success": False, "error": f"Unknown action: {action_type}"}
 
         result_data = self._mcp_call(server, tool, params, fallback=None)
-        feedback = format_action_result(action, result_data) if result_data else "⚠️ 执行失败"
+        feedback = format_action_result(action, result_data) if result_data else "⚠️ Execution failed"
         return {"success": bool(result_data), "result": result_data, "feedback_nl": feedback}
 
     def _handle_rules_search(self, query_text: str) -> dict:
@@ -356,7 +395,7 @@ class SecurityAgent:
             "query": query_text,
             "total": len(ranked),
             "rules": ranked[:20],  # top 20
-            "summary": f"找到 {len(ranked)} 条相关规则" if ranked else "未找到匹配规则",
+            "summary": f"Found {len(ranked)} related rules" if ranked else "No matching rules found",
         }
 
     def _handle_mode_switch(self, query_text: str) -> dict:
@@ -377,7 +416,7 @@ class SecurityAgent:
             "intent": INTENT_MODE_SWITCH,
             "new_mode": new_mode.value,
             "success": True,
-            "feedback_nl": f"✅ 已切换模式为「{new_mode.value}」",
+            "feedback_nl": f"✅ Mode switched to 「{new_mode.value}」",
         }
 
     # ═══════════════════════════════════════════════════════════════════
@@ -436,17 +475,17 @@ class SecurityAgent:
             if spl:
                 return spl
         except Exception as e:
-            print(f"  {YELLOW}⚠ LLM SPL 调用异常: {e}{RESET}")
-        print(f"  {YELLOW}⚠ LLM SPL 生成失败，回退关键词{RESET}")
+            print(f"  {YELLOW}⚠ LLM SPL call error: {e}{RESET}")
+        print(f"  {YELLOW}⚠ LLM SPL generation failed; falling back to keywords{RESET}")
         return self._nl_to_spl_keyword(query)
 
     def _summarize_query_results(self, events: list, query: str) -> str:
         if not events:
-            return "未找到匹配事件。"
+            return "No matching events found."
         blocked = sum(1 for e in events if e.event_type == "blocked")
         passed = sum(1 for e in events if e.event_type == "passed")
         collusion = sum(1 for e in events if e.event_type == "action_confirmation")
-        return f"共找到 {len(events)} 条匹配事件。blocked={blocked}, passed={passed}, collusion_signals={collusion}。"
+        return f"Found {len(events)} matching events. blocked={blocked}, passed={passed}, collusion_signals={collusion}."
 
     def _event_to_summary(self, event: GatewayEvent) -> dict:
         return {
@@ -460,8 +499,8 @@ class SecurityAgent:
 
     def run(self):
         self._setup_signal_handlers(); print(); _divider("═", 62)
-        print(f"  {BOLD}{CYAN}🛡️  多告警安全Agent 已启动{RESET}  {DIM}模式: {self.mode.value}{RESET}")
-        print(f"  {DIM}按 Ctrl+C 停止{RESET}"); _divider("═", 62); print()
+        print(f"  {BOLD}{CYAN}🛡️  Multi-Alert Security Agent started{RESET}  {DIM}mode: {self.mode.value}{RESET}")
+        print(f"  {DIM}Press Ctrl+C to stop{RESET}"); _divider("═", 62); print()
         self._run_cycle()
         while self._running:
             try:
@@ -474,7 +513,7 @@ class SecurityAgent:
 
     def _run_cycle(self):
         self.cycle_count += 1; print(); _divider("─", 60)
-        print(f"{_ts()} 🔍 {BOLD}分析轮次 #{self.cycle_count}{RESET}"); _divider("─", 60)
+        print(f"{_ts()} 🔍 {BOLD}Analysis cycle #{self.cycle_count}{RESET}"); _divider("─", 60)
         events = self._fetch_events()
         if not events: return
         new_events = [e for e in events if e.event_id not in self._processed_event_ids]
@@ -503,6 +542,7 @@ class SecurityAgent:
                     findings=ed.get("findings", []),
                     gateway_id=ed.get("gateway_id", "gateway-01"),
                     llm_provider=ed.get("llm_provider", "anthropic"),
+                    held=bool(ed.get("held", False)),
                 ))
             except Exception: continue
         return events
@@ -529,6 +569,7 @@ class SecurityAgent:
                     findings=ed.get("findings", []),
                     gateway_id=ed.get("gateway_id", "gateway-01"),
                     llm_provider=ed.get("llm_provider", "anthropic"),
+                    held=bool(ed.get("held", False)),
                 ))
             except Exception: continue
         return events
@@ -575,30 +616,148 @@ class SecurityAgent:
                 "risk_level": d.risk_level,
             }, fallback=None)
             if result and result.get("success"):
-                print(f"{_ts()} 📤 处置已写入 Splunk: {d.disposition_id}")
+                print(f"{_ts()} 📤 Disposition written to Splunk: {d.disposition_id}")
                 return True
             return False
         except Exception as e:
-            print(f"{_ts()} {YELLOW}⚠ Splunk HEC 写入失败: {e}{RESET}")
+            print(f"{_ts()} {YELLOW}⚠ Splunk HEC write failed: {e}{RESET}")
             return False
 
     def _process_event(self, event):
         matches = self.rule_engine.match(event)
-        if not matches: return
+        held = bool(getattr(event, "held", False))
+        # held (gateway gray-zone hold) must become an alert even with no analyst-rule match.
+        if not matches and not held: return
         br = [m for m in matches if m.action=="block"]; ar = [m for m in matches if m.action=="alert"]
-        risk = "high" if any(m.confidence>0.8 for m in br+ar) else "medium" if any(m.confidence>0.5 for m in br+ar) else "low"
-        # 网关已在源头阻断(event.blocked=True) → analyst 仅做告警预览，不重复处置；
-        # 仅当网关放行/漏检(blocked=False)且命中 block 级规则时，analyst 才补处置
-        # （灰区放行、或仅 analyst 关联多 Agent 才发现的共谋涌现）。
+        if br+ar:
+            risk = "high" if any(m.confidence>0.8 for m in br+ar) else "medium" if any(m.confidence>0.5 for m in br+ar) else "low"
+        else:
+            risk = "high" if event.risk_score>=70 else "medium" if event.risk_score>=40 else "low"
         gw_handled = bool(event.blocked)
+        need_dispo = held or (not gw_handled and len(br) > 0)
         alert = AlertRecord(alert_id=f"ALT-{uuid.uuid4().hex[:8]}", event=event, rule_matches=br+ar, risk_level=risk,
-            blocked=gw_handled,
-            pending_block=(not gw_handled and self.mode==AgentMode.OBSERVE and len(br)>0))
+            blocked=gw_handled, held=held,
+            pending_block=(need_dispo and self.mode==AgentMode.OBSERVE))
         with self._lock: self.alerts.append(alert)
-        # AUTO 模式：对网关漏检的 block 级事件自动执行首要处置方案，完成后转入处置记录页。
-        # OBSERVE 模式：保留为待确认告警，由用户在右侧面板逐方案点击执行。
-        if not gw_handled and self.mode==AgentMode.AUTO and br:
-            self.execute_disposition(alert.alert_id)
+        if self.mode==AgentMode.AUTO and need_dispo:
+            if held:
+                self.apply_disposition(alert.alert_id, selections=None, operator="auto")
+            elif br:
+                self.execute_disposition(alert.alert_id)
+
+    # AI disposition for held (gray-zone) alerts: recommend + multi-select apply + resolve hold
+    def _held_summary(self, alert) -> str:
+        e = alert.event
+        rules = ", ".join(m.rule_name for m in alert.rule_matches) or "(no rule matched)"
+        return (f"module: {e.module}\nagent_id: {e.agent_id}\nrisk_score: {e.risk_score}\n"
+                f"matched rules: {rules}\naction/subject: {e.subject_name}\n"
+                f"user input: {(e.user_input or '')[:800]}")
+
+    def recommend_disposition(self, alert_id: str) -> dict:
+        """Generate an AI disposition recommendation (LLM first, rule fallback)."""
+        from .disposition_planner import build_recommendation
+        with self._lock:
+            alert = next((a for a in self.alerts if a.alert_id == alert_id), None)
+        if alert is None:
+            return {"error": "alert not found"}
+        llm_result = None
+        if self._llm_config.get("api_key"):
+            try:
+                from . import llm_client
+                llm_result = llm_client.recommend_disposition(self._held_summary(alert))
+            except Exception:
+                llm_result = None
+        rec = build_recommendation(alert, llm_result)
+        rec.update({"alert_id": alert_id,
+                    "hold_id": alert.event.event_id if alert.held else None,
+                    "method": "llm" if llm_result else "rule"})
+        return rec
+
+    def _resolve_hold_mcp(self, hold_id: str, decision: str, reason: str = "") -> dict:
+        """Resolve a gateway hold (release/block) via gateway-control MCP."""
+        r = self._mcp_call("gateway-control", "resolve_hold",
+                           {"hold_id": hold_id, "decision": decision,
+                            "reason": reason, "operator": self.mode.value}, fallback=None)
+        return r or {"resolved": False, "note": "gateway-control not connected"}
+
+    def _apply_optimize_gateway(self, alert, suggested_rule=None) -> dict:
+        """Real 'optimize gateway policy': distill the attack pattern into a gateway rule (rule_store)."""
+        name = (alert.event.triggered_rule or "held_pattern").split(":")[-1] or "held_pattern"
+        patterns = []
+        desc = "analyst disposition: distilled held attack pattern into a gateway rule"
+        if suggested_rule and isinstance(suggested_rule, dict):
+            patterns = [x for x in (suggested_rule.get("patterns") or []) if isinstance(x, str) and x.strip()]
+            name = suggested_rule.get("name") or name
+            desc = suggested_rule.get("description") or desc
+        rule = {"name": name, "patterns": patterns, "engine": "keyword",
+                "severity_score": max(60, int(alert.event.risk_score or 70)), "description": desc}
+        r = self._mcp_call("gateway-control", "add_gateway_rule", {"rule": rule}, fallback=None)
+        if r and r.get("added"):
+            return {"key": "optimize_gateway", "status": "applied",
+                    "detail": f"added gateway rule {r.get('rule_id')}:{name}"
+                              + ("" if patterns else " (no patterns - add manually)")}
+        return {"key": "optimize_gateway", "status": "failed",
+                "detail": "gateway rule push failed (gateway-control not connected)"}
+
+    def apply_disposition(self, alert_id: str, selections=None, operator=None,
+                          accept_risk: bool = False, suggested_rule=None) -> dict:
+        """Apply chosen disposition options to a held alert and resolve the gateway hold.
+        Real effects: intercept/release (resolve hold) + optimize gateway policy (rule_store);
+        ban_ip / optimize_mcp are recorded only."""
+        with self._lock:
+            alert = next((a for a in self.alerts if a.alert_id == alert_id), None)
+        if alert is None:
+            return {"success": False, "error": "alert not found"}
+        if alert.handled:
+            return {"success": False, "error": "alert already disposed"}
+
+        operator = operator or ("auto" if self.mode == AgentMode.AUTO else "admin")
+        if selections is None:
+            rec = self.recommend_disposition(alert_id)
+            selections = rec.get("recommended_actions", []) or []
+            if suggested_rule is None:
+                suggested_rule = rec.get("suggested_rule")
+        sels = {"accept_risk"} if accept_risk else set(selections or [])
+        if not sels:
+            sels = {"accept_risk"}
+
+        applied = []
+        if "optimize_gateway" in sels:
+            applied.append(self._apply_optimize_gateway(alert, suggested_rule))
+        if "ban_ip" in sels:
+            applied.append({"key": "ban_ip", "status": "recorded",
+                            "detail": f"recommend banning source agent={alert.event.agent_id} (recorded only)"})
+        if "optimize_mcp" in sels:
+            applied.append({"key": "optimize_mcp", "status": "recorded",
+                            "detail": f"recommend second-factor/disable for {alert.event.agent_id} action '{alert.event.subject_name}' (recorded only)"})
+
+        decision = "block" if "block" in sels else "release"
+        hold_id = alert.event.event_id
+        if alert.held:
+            hold_res = self._resolve_hold_mcp(hold_id, decision, reason=f"analyst disposition: {sorted(sels)}")
+            applied.append({"key": "block" if decision == "block" else "accept_risk",
+                            "status": "resolved", "detail": f"gateway hold -> {decision}"})
+        else:
+            hold_res = {"note": "alert not held, skip resolve"}
+
+        action = "block" if decision == "block" else "accept_risk"
+        cmd = f"resolve_hold(hold_id={hold_id}, decision={decision}); selections={sorted(sels)}"
+        detail = "; ".join(f"[{a['key']}:{a['status']}] {a['detail']}" for a in applied) or "(none)"
+        d = self._record_disposition(
+            alert=alert, operator=operator, action=action, command=cmd,
+            result=("blocked" if decision == "block" else "released"),
+            detail=detail, alert_text=alert.event.user_input, mode=self.mode.value,
+            acknowledged_at=(None if operator == "auto" else datetime.now()))
+        with self._lock:
+            alert.disposition_id = d.disposition_id
+            alert.pending_block = False
+            alert.held = False
+            alert.blocked = (decision == "block")
+            alert.handled = True
+        self._send_disposition_to_splunk(d)
+        print(f"{_ts()} {'auto' if operator=='auto' else 'manual'} disposition(held) {alert_id} -> {decision} selections={sorted(sels)}")
+        return {"success": True, "disposition_id": d.disposition_id, "decision": decision,
+                "applied": applied, "selections": sorted(sels), "hold_result": hold_res}
 
     def execute_block(self, event):
         gw = self._mcp_call("gateway-control","send_block_command",
@@ -611,39 +770,39 @@ class SecurityAgent:
         return r
 
     def confirm_block(self, alert_id):
-        """兼容旧入口（/api/block）：等价于对该告警执行首要处置方案。"""
+        """Backwards-compatible entry point (/api/block): equivalent to running the primary disposition plan for this alert."""
         return self.execute_disposition(alert_id)
 
     def execute_disposition(self, alert_id, rule_id=None):
-        """执行某条告警的处置方案（需求2/3）。
-        rule_id 指定某条匹配规则的方案；不传则取首个(block 优先)。
-        - block 类 → 调网关封禁来源；alert 类 → 仅记录(observed)，无网关动作。
-        完成后：记录 DispositionRecord(含告警原文/模式) → 写回 Splunk status →
-        标记 alert.handled=True（从告警栏移入处置记录页, 需求4）。
-        AUTO 模式 operator=auto、OBSERVE 模式 operator=admin。"""
+        """Execute the disposition plan for an alert (requirements 2/3).
+        rule_id selects the plan for a specific matched rule; if omitted, the first one is used (block takes priority).
+        - block type → call the gateway to ban the source; alert type → record only (observed), no gateway action.
+        On completion: write a DispositionRecord (including the original alert text/mode) → write status back to Splunk →
+        mark alert.handled=True (move it from the alert bar to the disposition records page, requirement 4).
+        operator=auto in AUTO mode, operator=admin in OBSERVE mode."""
         from .disposition_planner import plans_for_alert
         with self._lock:
             alert = next((a for a in self.alerts if a.alert_id == alert_id), None)
         if alert is None:
-            return {"success": False, "error": "告警不存在"}
+            return {"success": False, "error": "Alert does not exist"}
         if alert.handled:
-            return {"success": False, "error": "该告警已处置"}
+            return {"success": False, "error": "This alert has already been disposed"}
         if getattr(alert.event, "blocked", False):
-            return {"success": False, "error": "网关已在源头阻断，无需 analyst 重复处置"}
+            return {"success": False, "error": "Gateway already blocked at the source; no analyst re-disposition needed"}
         plans = plans_for_alert(alert)
         if rule_id:
             plans = [p for p in plans if p["rule_id"] == rule_id] or plans
         if not plans:
-            return {"success": False, "error": "无可执行处置方案"}
+            return {"success": False, "error": "No executable disposition plan"}
         plan = plans[0]
         mode = self.mode.value
         operator = "auto" if self.mode == AgentMode.AUTO else "admin"
 
         if plan["disp_action"] == "block":
-            r = self.execute_block(alert.event)           # 调网关 /bans（自带锁/兜底）
+            r = self.execute_block(alert.event)           # call the gateway /bans (has its own lock/fallback)
             status = r.get("status", DispositionStatus.SIMULATED)
         else:
-            status = "observed"                            # alert 类：仅记录，无封禁
+            status = "observed"                            # alert type: record only, no ban
 
         d = self._record_disposition(
             alert=alert, operator=operator, action=plan["disp_action"],
@@ -658,7 +817,7 @@ class SecurityAgent:
             alert.blocked = (plan["disp_action"] == "block" and status == "blocked")
             alert.handled = True
         self._send_disposition_to_splunk(d)
-        print(f"{_ts()} {'🤖自动' if operator=='auto' else '👤人工'}处置 {alert_id} "
+        print(f"{_ts()} {'🤖 Auto' if operator=='auto' else '👤 Manual'} disposition {alert_id} "
               f"[{plan['rule_name']}] → {plan['disp_action']}/{status}")
         return {"success": True, "disposition_id": d.disposition_id,
                 "status": status, "mode": mode, "plan": plan}
@@ -669,10 +828,10 @@ class SecurityAgent:
     def generate_storyline(self, tree): return generate_storyline(tree)
 
     def load_demo_scenario(self) -> str:
-        """演示：把内置的 3-Agent 退款共谋场景(demo_spans)接入实时流——
-        构建因果决策树 + 涌现检测，作为一条带 Span 的告警注入，
-        让 UI 的决策树 / 涌现行为视图端到端真正可见。
-        重复调用先清掉上一条 demo（按 trace_id / span_id / alert 前缀去重）。"""
+        """Demo: feed the built-in 3-agent refund collusion scenario (demo_spans) into the live stream —
+        build the causal decision tree + emergence detection and inject it as a span-bearing alert,
+        so the UI's decision tree / emergent behavior views are truly visible end to end.
+        A repeat call first clears the previous demo (dedup by trace_id / span_id / alert prefix)."""
         from .demo_spans import DEMO_SPANS
         from .models import Finding
         from .report_engine import ReportA, ReportB
@@ -685,13 +844,13 @@ class SecurityAgent:
             event_id=f"DEMO-{tree.trace_id}",
             timestamp=datetime.now(),
             module="action_guard",
-            # 共谋涌现是网关单点拦不住、仅 analyst 关联多 Agent 才发现的 → blocked=False，
-            # 使其走 analyst 处置路径（OBSERVE 待确认 / AUTO 自动处置），展示 analyst 独有价值。
+            # Collusion emergence can't be caught by the gateway alone; only the analyst finds it by correlating multiple agents → blocked=False,
+            # so it goes through the analyst disposition path (OBSERVE pending confirmation / AUTO auto-disposition), showcasing the analyst's unique value.
             blocked=False,
             handler="gateway",
             risk_score=95,
-            user_input=("3-Agent退款场景：技术支持私下通知退款Agent可退款，"
-                        "退款Agent绕过客服确认、并误读金额(￥199→￥299)"),
+            user_input=("3-agent refund scenario: tech support privately told the refund agent a refund was allowed, "
+                        "and the refund agent bypassed customer-service confirmation and misread the amount (¥199 -> ¥299)"),
             subject_name="execute_refund",
             agent_id="refund",
             findings=[Finding(detector="causal_analyzer", rule_hit="abnormal_collaboration",
@@ -724,14 +883,14 @@ class SecurityAgent:
             self.alerts.insert(0, alert)
             self.trees.append(tree)
             self.anomalies.extend(anomalies)
-        print(f"{_ts()} 🎬 已载入演示场景: tree={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
+        print(f"{_ts()} 🎬 Demo scenario loaded: tree={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
         return alert.alert_id
 
     def ingest_trace_from_splunk(self, trace_id: str = "trace-refund-001",
                                  earliest: str = "-30d") -> dict:
-        """方案A阶段1：从 Splunk 拉取一条 trace 的 span(sourcetype=ai_sentinel:span)，
-        还原为 Span → 构建决策树 + 涌现检测 → 注入为带 Span 的告警。
-        与 load_demo_scenario 的区别：span 数据是【真从 Splunk 查回】的，不是硬编码。"""
+        """Plan A, phase 1: pull a trace's spans from Splunk (sourcetype=ai_sentinel:span),
+        rebuild them into Spans → build the decision tree + emergence detection → inject as a span-bearing alert.
+        Difference from load_demo_scenario: the span data is actually queried back from Splunk, not hardcoded."""
         from .models import Span, Finding
         from .report_engine import ReportA, ReportB
 
@@ -763,7 +922,7 @@ class SecurityAgent:
                 metadata=ed.get("metadata") if isinstance(ed.get("metadata"), dict) else {},
             ))
         if not spans:
-            return {"success": False, "error": f"Splunk 中没有 trace_id={trace_id} 的 span（先跑 span_emitter.py）"}
+            return {"success": False, "error": f"No spans with trace_id={trace_id} in Splunk (run span_emitter.py first)"}
 
         tree = build_decision_tree(spans)
         anomalies = detect_emergence(tree)
@@ -771,7 +930,7 @@ class SecurityAgent:
             event_id=f"TRACE-{tree.trace_id}",
             timestamp=datetime.now(),
             module="action_guard", blocked=True, handler="gateway", risk_score=95,
-            user_input=f"多Agent trace {tree.trace_id}（{tree.total_steps} 步，来自 Splunk）",
+            user_input=f"Multi-agent trace {tree.trace_id} ({tree.total_steps} steps, from Splunk)",
             subject_name="multi_agent_trace", agent_id=(spans[-1].agent_id if spans else "refund"),
             findings=[Finding(detector="causal_analyzer", rule_hit="abnormal_collaboration",
                               severity="critical", matched=tree.trace_id,
@@ -799,12 +958,12 @@ class SecurityAgent:
             self.alerts.insert(0, alert)
             self.trees.append(tree)
             self.anomalies.extend(anomalies)
-        print(f"{_ts()} 🛰 已从 Splunk 摄取 trace={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
+        print(f"{_ts()} 🛰 Ingested trace from Splunk: trace={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
         return {"success": True, "alert_id": alert.alert_id,
                 "trace_id": tree.trace_id, "spans": len(spans), "anomalies": len(anomalies)}
 
     def get_alerts(self):
-        # 只返回未处置的告警；已处置(handled)的转入处置记录页（需求4）。
+        # Only return undisposed alerts; disposed (handled) ones move to the disposition records page (requirement 4).
         with self._lock:
             return [a.to_dict() for a in self.alerts if not a.handled]
     def get_alert(self, aid):
@@ -888,13 +1047,13 @@ class SecurityAgent:
             "errors":self._mcp.get_errors()}
 
     def _setup_signal_handlers(self):
-        signal.signal(signal.SIGINT, lambda s,f: setattr(self,'_running',False) or _think("收到停止信号"))
+        signal.signal(signal.SIGINT, lambda s,f: setattr(self,'_running',False) or _think("Received stop signal"))
 
     def _shutdown(self):
         if self._mcp:
             try: self._mcp.stop()
             except: pass
-        print(f"{_ts()} 🛡️  Agent已停止")
+        print(f"{_ts()} 🛡️  Agent stopped")
 
 def main():
     agent = SecurityAgent(mode=AgentMode.OBSERVE)

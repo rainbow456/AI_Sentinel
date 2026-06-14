@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Span Emitter — 方案 A 阶段 1（最小版）
+Span Emitter — Plan A, Stage 1 (minimal version)
 
-代表"被监控的多 Agent 受害系统"向 Splunk 上报 OpenTelemetry 风格的 Span。
-把内置的 3-Agent 退款共谋场景(analyst/demo_spans.DEMO_SPANS)作为 span 来源，
-以新 sourcetype `ai_sentinel:span` 经 HEC 写入 Splunk —— 与网关安全事件同一条管线。
+Acts as the "monitored multi-agent victim system" and reports OpenTelemetry-style
+spans to Splunk. It uses the built-in 3-agent refund-collusion scenario
+(analyst/demo_spans.DEMO_SPANS) as the span source and writes them to Splunk via HEC
+under the new sourcetype `ai_sentinel:span` — the same pipeline as gateway security
+events.
 
-这样 span 数据是【真实流经 Splunk】的；唯一仍是脚本的是"场景生成器"本身，
-后续把它换成真实的 LLM 多 Agent 编排即可，下游(Analyst 摄取/建树/涌现检测)不用改。
+This way the span data really flows through Splunk; the only part that is still a
+script is the "scenario generator" itself. Later it can be replaced with a real LLM
+multi-agent orchestration without changing anything downstream (Analyst ingestion /
+tree building / emergence detection).
 
-用法:
-  python span_emitter.py                 # 上报默认场景(trace-refund-001)
-  python span_emitter.py --trace my-001  # 覆盖 trace_id（同时改写 span 的 trace_id）
+Usage:
+  python span_emitter.py                 # report the default scenario (trace-refund-001)
+  python span_emitter.py --trace my-001  # override trace_id (also rewrites each span's trace_id)
 
-环境变量(复用网关 HEC 配置):
+Environment variables (reuse the gateway HEC config):
   SPLUNK_HEC_URL / SPLUNK_HEC_TOKEN / SPLUNK_HEC_INDEX / SPLUNK_HEC_VERIFY
 """
 
@@ -32,7 +36,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
-# Windows 控制台 GBK 兜底：emoji 不致崩
+# Windows console GBK fallback: don't crash on emoji
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(errors="replace")
@@ -43,7 +47,7 @@ _proj = os.path.dirname(os.path.abspath(__file__))
 if _proj not in sys.path:
     sys.path.insert(0, _proj)
 
-from analyst.demo_spans import DEMO_SPANS  # 场景来源（脚本，可替换为真实 swarm）
+from analyst.demo_spans import DEMO_SPANS  # scenario source (a script; can be swapped for a real swarm)
 
 SOURCETYPE = "ai_sentinel:span"
 
@@ -57,7 +61,7 @@ def _hec_cfg():
 
 
 def _span_to_event(s, trace_id_override=None) -> dict:
-    """把 Span 序列化成可上报、可被 Analyst 还原的扁平 JSON。"""
+    """Serialize a Span into flat JSON that can be reported and reconstructed by the Analyst."""
     return {
         "trace_id": trace_id_override or s.trace_id,
         "span_id": s.span_id,
@@ -75,10 +79,15 @@ def _span_to_event(s, trace_id_override=None) -> dict:
     }
 
 
-def emit(trace_id_override=None) -> int:
+def emit_spans(spans, trace_id_override=None) -> int:
+    """Report an arbitrary list of Spans to Splunk HEC (sourcetype=ai_sentinel:span).
+
+    This is the shared sink used by the built-in refund demo AND by
+    traffic_generator.py's collusion / negotiation scenarios.
+    """
     url, token, index, verify = _hec_cfg()
     if not token:
-        print("ERROR: SPLUNK_HEC_TOKEN 未配置，无法上报 span", file=sys.stderr)
+        print("ERROR: SPLUNK_HEC_TOKEN not configured; cannot report spans", file=sys.stderr)
         return 0
     ctx = None
     if url.startswith("https") and not verify:
@@ -87,7 +96,7 @@ def emit(trace_id_override=None) -> int:
         ctx.verify_mode = ssl.CERT_NONE
 
     sent = 0
-    for s in DEMO_SPANS:
+    for s in spans:
         envelope = {"sourcetype": SOURCETYPE, "index": index,
                     "event": _span_to_event(s, trace_id_override)}
         data = json.dumps(envelope, ensure_ascii=False, default=str).encode("utf-8")
@@ -100,18 +109,72 @@ def emit(trace_id_override=None) -> int:
                 if 200 <= resp.status < 300:
                     sent += 1
         except Exception as e:
-            print(f"  span {s.span_id} 上报失败: {e}", file=sys.stderr)
+            print(f"  span {s.span_id} failed to report: {e}", file=sys.stderr)
+    return sent
+
+
+def _scenarios() -> dict:
+    """Registry of all span scenarios: {trace_id: [Span, ...]}.
+
+    The refund demo lives in analyst.demo_spans; the collusion / negotiation
+    scenarios live in traffic_generator.py (imported lazily to avoid a hard dep).
+    """
+    reg = {"trace-refund-001": list(DEMO_SPANS)}
+    try:
+        import traffic_generator
+        reg.update(traffic_generator.get_span_scenarios())
+    except Exception as e:
+        print(f"  (collusion/negotiation scenarios unavailable: {e})", file=sys.stderr)
+    return reg
+
+
+# Logical scenario name → trace_id.
+_NAME_TO_TRACE = {
+    "refund": "trace-refund-001",
+    "collusion": "trace-collusion-001",
+    "negotiation": "trace-negotiation-001",
+}
+
+
+def emit(trace_id_override=None) -> int:
+    """Backwards-compatible entry point: emit the built-in refund demo."""
+    _, _, index, _ = _hec_cfg()
+    sent = emit_spans(DEMO_SPANS, trace_id_override)
     tid = trace_id_override or (DEMO_SPANS[0].trace_id if DEMO_SPANS else "?")
-    print(f"已上报 {sent}/{len(DEMO_SPANS)} 个 span 到 Splunk "
+    print(f"Reported {sent}/{len(DEMO_SPANS)} spans to Splunk "
           f"(sourcetype={SOURCETYPE}, index={index}, trace_id={tid})")
     return sent
 
 
 def main():
     ap = argparse.ArgumentParser(description="Emit multi-agent spans to Splunk HEC")
-    ap.add_argument("--trace", default=None, help="覆盖 trace_id")
+    ap.add_argument("--scenario", default="refund",
+                    choices=["refund", "collusion", "negotiation", "all"],
+                    help="Which span scenario to emit (default: refund demo)")
+    ap.add_argument("--trace", default=None,
+                    help="override trace_id (only valid with a single scenario)")
     args = ap.parse_args()
-    emit(args.trace)
+
+    _, _, index, _ = _hec_cfg()
+    reg = _scenarios()
+    if args.scenario == "all":
+        names = ["refund", "collusion", "negotiation"]
+    else:
+        names = [args.scenario]
+
+    total = 0
+    for nm in names:
+        tid = _NAME_TO_TRACE[nm]
+        spans = reg.get(tid)
+        if not spans:
+            print(f"  scenario '{nm}' ({tid}) unavailable; skipped", file=sys.stderr)
+            continue
+        override = args.trace if (args.trace and len(names) == 1) else tid
+        sent = emit_spans(spans, override)
+        total += sent
+        print(f"Reported {sent}/{len(spans)} spans to Splunk "
+              f"(sourcetype={SOURCETYPE}, index={index}, trace_id={override})")
+    return total
 
 
 if __name__ == "__main__":

@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-LLM 兼容检测代理 / OpenAI-compatible detecting proxy
+OpenAI-compatible detecting proxy
 ===================================================
-任何语言的 agent 只要把 base_url 指到本网关（OPENAI_BASE_URL=http://gateway/v1），
-零代码即可让 LLM 输入/输出经过检测、拦截、审计。
+Any agent, in any language, only has to point its base_url at this gateway
+(OPENAI_BASE_URL=http://gateway/v1) to have LLM input/output detected, blocked,
+and audited with zero code changes.
 
-流程：入参检测 → 命中且超阈值则拦截（返回安全拒答）→ 否则转发真上游（或无上游时
-模拟放行）→ 出参可选检测 → 标准化事件审计（带 agent_id）。
+Flow: detect input -> if it hits and exceeds the threshold, block (return a safe
+refusal) -> otherwise forward to the real upstream (or pass through in simulated
+mode when no upstream is configured) -> optionally detect output -> emit a
+normalized audit event (with agent_id).
 
-上游可选：OPENAI_UPSTREAM_URL / OPENAI_UPSTREAM_KEY；不配则走模拟模式（便于先打通）。
+Upstream is optional: OPENAI_UPSTREAM_URL / OPENAI_UPSTREAM_KEY; without it the
+proxy runs in simulated mode (handy for getting wired up first).
 """
 
 # Load .env before reading env vars at module scope
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
+    load_dotenv(override=True)  # .env takes precedence over env vars injected by the script/shell
 except ImportError:
     pass
 
@@ -77,7 +81,7 @@ def _agent_id(req: Request) -> str:
         return hdr
     auth = req.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
-        return "key:" + auth[7:][:12]   # api-key 前缀作 agent 标识
+        return "key:" + auth[7:][:12]   # use the api-key prefix as the agent identifier
     return "anonymous-agent"
 
 
@@ -100,7 +104,7 @@ def _gather_input(messages: List[Dict[str, Any]]) -> str:
         c = m.get("content")
         if isinstance(c, str) and m.get("role") in ("user", "system", "tool"):
             parts.append(c)
-        elif isinstance(c, list):  # OpenAI 多模态 content 数组
+        elif isinstance(c, list):  # OpenAI multimodal content array
             parts += [b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
     return "\n".join(p for p in parts if p)
 
@@ -116,7 +120,7 @@ async def chat_completions(request: Request) -> JSONResponse:
     messages = body.get("messages", []) or []
     agent_id = _agent_id(request)
 
-    # ① 入参检测（user_input 通道）
+    # 1) Detect input (user_input channel).
     text = _gather_input(messages)
     hit = rule_engine.detect(expand_input(text))
     pol = policy_store.get()
@@ -131,10 +135,10 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     if blocked:
         return JSONResponse(_openai_reply(
-            model, "请求命中安全策略，已被 AI_Sentinel 网关拦截。",
+            model, "This request hit a security policy and was blocked by the AI_Sentinel gateway.",
             {"blocked": True, "risk_score": score, "rule_hit": hit.get("rule_hit", "")}))
 
-    # ② 转发上游（未配置则模拟放行）
+    # 2) Forward to the upstream (pass through in simulated mode if not configured).
     if UPSTREAM_URL and UPSTREAM_KEY:
         try:
             async with httpx.AsyncClient(timeout=60, trust_env=False) as c:
@@ -144,9 +148,9 @@ async def chat_completions(request: Request) -> JSONResponse:
             data = r.json()
         except Exception as e:
             return JSONResponse(_openai_reply(
-                model, f"上游 LLM 暂不可达（已放行）：{e}", {"blocked": False, "upstream_error": True}))
+                model, f"Upstream LLM temporarily unreachable (passed through): {e}", {"blocked": False, "upstream_error": True}))
         return JSONResponse(data)
 
     return JSONResponse(_openai_reply(
-        model, f"[模拟回复·已通过安全检测] 收到 {len(messages)} 条消息。",
+        model, f"[Simulated reply - passed security detection] Received {len(messages)} message(s).",
         {"blocked": False, "simulated": True, "risk_score": score}))

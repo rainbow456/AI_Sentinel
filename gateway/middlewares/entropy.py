@@ -1,35 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-High-entropy blob detector / 高熵混淆串检测器
-=============================================
-EN: Flags long, high-entropy tokens that look like encoded / encrypted /
-    obfuscated payloads (base64, hex dumps, ciphertext) -- a keyword-free
-    heuristic that backstops smuggled content the decoders couldn't unwrap.
-中文：标记又长又"乱"的高熵串（Base64、十六进制转储、密文等疑似编码/加密载荷）。
-    这是一条不依赖关键词的启发式规则，兜底那些解码器解不开的夹带内容。
+High-entropy blob detector
+===========================
+Flags long, high-entropy tokens that look like encoded / encrypted /
+obfuscated payloads (base64, hex dumps, ciphertext) -- a keyword-free
+heuristic that backstops smuggled content the decoders couldn't unwrap.
 
-Return / 返回: same shape as other detectors. / 与其它检测器结构一致。
+Return: same shape as other detectors.
 """
 
 import re
 
-# 规则已迁移到 rule_store 规则库，由 middlewares/rule_engine 数据驱动执行。
+# Rules have been migrated to the rule_store rule library and are executed
+# data-driven by middlewares/rule_engine.
 SUPERSEDED = True
 import math
 from collections import Counter
 from typing import Dict, Any
 
 # Long contiguous tokens are the only candidates worth scoring.
-# 只有足够长的连续 token 才值得参与打分。
 _TOKEN_RE = re.compile(r"\S{24,}")
 
-_MIN_LEN = 24            # token must be at least this long / token 最短长度
-_MIN_ENTROPY = 4.5       # bits/char threshold for "looks encoded" / "像编码"的熵阈值
-_MIN_COMPACT_RATIO = 0.9 # share of base64/hex-ish chars / 紧凑字符集占比
+_MIN_LEN = 24            # token must be at least this long
+_MIN_ENTROPY = 4.5       # bits/char threshold for "looks encoded"
+_MIN_COMPACT_RATIO = 0.9 # share of base64/hex-ish chars
 
 
 def _shannon_entropy(s: str) -> float:
-    # Bits of entropy per character. / 每字符的香农熵（比特）。
+    # Bits of entropy per character.
     counts = Counter(s)
     n = len(s)
     return -sum((c / n) * math.log2(c / n) for c in counts.values())
@@ -37,7 +35,6 @@ def _shannon_entropy(s: str) -> float:
 
 def _is_encoded_looking(token: str) -> bool:
     # Mostly alnum + base64/hex separators, no URL/sentence punctuation.
-    # 主要由字母数字与 Base64/十六进制分隔符组成，且不含 URL/句子标点。
     if "://" in token or token.count(".") >= 2:
         return False
     compact = sum(1 for ch in token if ch.isalnum() or ch in "+/=_-")
