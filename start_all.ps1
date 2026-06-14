@@ -83,7 +83,7 @@ Set-Default 'SPLUNK_HEC_INDEX'         'main'   # 网关写入索引；须与 SP
 Set-Default 'SPLUNK_DEFAULT_INDEX'     'main'   # Analyst 查询索引
 Set-Default 'SPLUNK_MAX_RESULTS'       '1000'
 Set-Default 'RULES_AUTO_RELOAD'        'true'
-Set-Default 'POLL_INTERVAL'            '10'
+Set-Default 'POLL_INTERVAL'            '1'
 Set-Default 'SENTINEL_BLOCK_DETECTORS' 'injection,prompt_injection'
 
 # ═══════════════════════════════════════════════════════════════════════════
