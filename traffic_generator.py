@@ -870,7 +870,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python traffic_generator.py                           # CRM Agent mode, 30s, 35% attacks
+  python traffic_generator.py                           # CRM Agent mode, 30s, 60% attacks
   python traffic_generator.py --duration 120            # 120 seconds
   python traffic_generator.py --interval 2.0 --attack-ratio 0.4
   python traffic_generator.py --category gateway        # only gateway-blockable attacks
@@ -894,8 +894,9 @@ Examples:
     )
     parser.add_argument(
         "--attack-ratio", "-r",
-        type=float, default=0.35,
-        help="Probability a request is an attack, 0.0–1.0 (default: 0.35)",
+        type=float, default=0.6,
+        help="Probability a request is an attack, 0.0–1.0 (default: 0.6 — attack-"
+             "heavy so disposition-needing alerts surface quickly)",
     )
     parser.add_argument(
         "--loop", "-l",
