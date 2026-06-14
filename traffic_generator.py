@@ -28,6 +28,15 @@ import time
 import urllib.request
 import urllib.error
 
+# Make stdout/stderr tolerant of consoles that can't encode emoji (e.g. Windows
+# GBK/cp936): replace unencodable chars instead of crashing with
+# UnicodeEncodeError (the ✔/🛡️ banners would otherwise kill the process).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 # ── Config ────────────────────────────────────────────────────────────────────
 CRM_URL = "http://localhost:6001"       # CRM Agent web API
 GATEWAY_URL = "http://localhost:3001"   # Gateway (direct mode)

@@ -1033,7 +1033,7 @@ python traffic_generator.py --duration 10 --interval 1.0
 curl http://localhost:5000/api/events/recent
 
 # 7. Check Splunk for events
-curl -k -u admin:hero54110 https://localhost:8089/services/search/jobs \
+curl -k -u admin:changeme https://localhost:8089/services/search/jobs \
   -d search="search index=* sourcetype=\"ai_sentinel:gateway\" | head 10"
 
 # 8. Open dashboard and verify:

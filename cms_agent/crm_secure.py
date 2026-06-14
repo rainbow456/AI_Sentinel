@@ -41,7 +41,7 @@
 # Load .env before reading any env vars (must be before crm_agent import)
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 
@@ -50,6 +50,14 @@ import sys
 import json
 import urllib.request
 import urllib.error
+
+# Make stdout/stderr tolerant of consoles that can't encode emoji (e.g. Windows
+# GBK/cp936): replace unencodable chars instead of crashing the process.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 import crm_agent  # 原版 Agent，导入不会触发其主程序（受 __main__ 保护）
 

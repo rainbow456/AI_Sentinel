@@ -44,7 +44,7 @@ def _divider(c="─", w=62): print(f"{DIM}{c * w}{RESET}")
 class SecurityAgent:
     """Multi-alert security agent with dual-mode operation & NL command support."""
 
-    LLM_SPL_PROMPT = "你是一个Splunk搜索专家。将用户的自然语言查询转换为SPL查询。\n字段: timestamp, event_type(blocked|passed|action_confirmation), user_input, detection_result.rule_triggered\n示例: '过去1小时的SQL注入告警' → search index=gateway_events event_type=blocked \"sql injection\" earliest=-1h\n查询: {query}\n只输出SPL。"
+    LLM_SPL_PROMPT = "你是一个Splunk搜索专家。将用户的自然语言查询转换为SPL查询。\n字段: timestamp, event_type(blocked|passed|action_confirmation), user_input, detection_result.rule_triggered\n示例: '过去1小时的SQL注入告警' → search index=main event_type=blocked \"sql injection\" earliest=-1h\n查询: {query}\n只输出SPL。"
     LLM_INTENT_PROMPT = "判断意图(query/action/rules_search/mode_switch): {query}"
     LLM_ACTION_PROMPT = "解析为JSON: {{\"action_type\":\"block|unblock|toggle_rule\",\"target\":\"...\",\"params\":{{...}}}}\n输入: {query}"
 
@@ -395,7 +395,7 @@ class SecurityAgent:
             if cn in q or en in q:
                 search_terms.append(en)
 
-        parts = ["search index=gateway_events"]
+        parts = ["search index=main"]
         if type_filter:
             parts.append(type_filter)
         if search_terms:
@@ -648,8 +648,8 @@ class SecurityAgent:
         """Return recent events from Splunk for the dashboard event stream."""
         events = []
         result = self._mcp_call("splunk-query", "splunk_search", {
-            "query": "search index=* sourcetype=\"ai_sentinel:gateway\"",
-            "earliest": "-10m", "latest": "now"
+            "query": "search index=main sourcetype=\"ai_sentinel:gateway\" | sort -_time",
+            "earliest": "-24h", "latest": "now"
         }, fallback=None)
         if result and result.get("events"):
             for ed in result["events"][:limit]:

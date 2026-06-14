@@ -9,6 +9,14 @@ import sys
 import threading
 import time
 
+# Make stdout/stderr tolerant of consoles that can't encode emoji (e.g. Windows
+# GBK/cp936): replace unencodable chars instead of crashing the process.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)

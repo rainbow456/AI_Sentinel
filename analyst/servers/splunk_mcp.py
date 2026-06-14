@@ -116,10 +116,16 @@ def _send_to_hec(event_payload: dict) -> bool:
     try:
         import urllib.request
         import urllib.error
-        data = json.dumps({
+        envelope = {
             "sourcetype": "ai_sentinel:disposition",
             "event": event_payload,
-        }, ensure_ascii=False, default=str).encode("utf-8")
+        }
+        # Write disposition events to the same index as gateway events (main)
+        # so the Analyst log module finds them under index=main.
+        hec_index = os.getenv("SPLUNK_HEC_INDEX", "main")
+        if hec_index:
+            envelope["index"] = hec_index
+        data = json.dumps(envelope, ensure_ascii=False, default=str).encode("utf-8")
         req = urllib.request.Request(
             hec_url,
             data=data,
@@ -139,7 +145,7 @@ def _send_to_hec(event_payload: dict) -> bool:
 # ── Simulated event store (fallback when Splunk is unreachable) ────────────────
 
 _EVENT_STORE: list[dict] = []
-_INDEXES = ["gateway_events", "ai_sentinel_disposition", "agent_spans", "audit_logs"]
+_INDEXES = ["main", "ai_sentinel_disposition", "agent_spans", "audit_logs"]
 
 
 def _init_store():
@@ -182,7 +188,7 @@ def _match_event(event: dict, query: str, start: datetime, end: datetime) -> boo
     if ts < start or ts > end:
         return False
     if not query or query.strip() in ("*", "index=*", "search index=*",
-                                      "search index=gateway_events"):
+                                      "search index=main"):
         return True
     q = query.lower()
     searchable = json.dumps(event, default=str).lower()
@@ -260,6 +266,21 @@ def _execute_real_search(spl: str, earliest: str = "-24h", latest: str = "now",
                     entry[key] = val["content"]
                 else:
                     entry[key] = val
+            # HEC-ingested events carry their real payload as a JSON string in
+            # _raw; Splunk does not always extract those into top-level fields.
+            # Flatten them so downstream consumers see event_id / timestamp /
+            # blocked / ... directly (matching the simulated backend shape).
+            # Without this, GatewayEvent parsing in agent.py raises KeyError on
+            # ed["timestamp"] and silently drops every event (events=0).
+            raw = entry.get("_raw")
+            if isinstance(raw, str) and raw.lstrip().startswith("{"):
+                try:
+                    payload = json.loads(raw)
+                    if isinstance(payload, dict):
+                        for k, v in payload.items():
+                            entry.setdefault(k, v)
+                except (ValueError, TypeError):
+                    pass
             normalized.append(entry)
         return normalized
 
@@ -349,7 +370,7 @@ async def _do_list_indexes() -> str:
     # Fallback
     _init_store()
     indexes = [
-        {"name": n, "event_count": len(_EVENT_STORE) if n == "gateway_events" else 0,
+        {"name": n, "event_count": len(_EVENT_STORE) if n == "main" else 0,
          "status": "active", "backend": "simulated"}
         for n in _INDEXES
     ]

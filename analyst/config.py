@@ -32,7 +32,7 @@ Custom rules path:
 # Load .env before reading any env vars
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 
@@ -62,7 +62,7 @@ class SplunkConfig:
     use_real: bool = False   # True = connect to real Splunk; False = simulated
 
     # ── Query defaults ──────────────────────────────────────────────────
-    default_index: str = "gateway_events"
+    default_index: str = "main"
     default_earliest: str = "-1h"
     max_results: int = 1000
 
@@ -144,7 +144,7 @@ def get_config() -> AppConfig:
         use_ssl=_env_bool("SPLUNK_USE_SSL", False),
         verify_ssl=_env_bool("SPLUNK_VERIFY_SSL", False),
         use_real=_env_bool("SPLUNK_USE_REAL", False),
-        default_index=_env("SPLUNK_DEFAULT_INDEX", "gateway_events"),
+        default_index=_env("SPLUNK_DEFAULT_INDEX", "main"),
         default_earliest=_env("SPLUNK_DEFAULT_EARLIEST", "-1h"),
         max_results=_env_int("SPLUNK_MAX_RESULTS", 1000),
     )

@@ -284,13 +284,13 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;
       <div class="spl-page">
         <div class="section-title">🗄️ Splunk 日志查询 <span id="splHealth" style="font-size:10px;color:var(--text-dim)"></span></div>
         <div class="spl-presets" id="splPresets">
-          <button class="spl-preset-btn" onclick="splPreset('search index=gateway_events blocked=true | head 50')" title="被拦截事件">🛑 被拦截</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=gateway_events skill_scan=true | head 50')" title="Skill扫描事件">🔎 Skill扫描</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=_internal action=block | head 50')" title="处置审计日志">📜 处置审计</button>
-          <button class="spl-preset-btn" onclick="splPreset('search index=gateway_events | head 100')" title="全部事件">📋 全部</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; blocked=true | head 50')" title="被拦截事件">🛑 被拦截</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:gateway&quot; module=skill_scanner | head 50')" title="Skill扫描事件">🔎 Skill扫描</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main sourcetype=&quot;ai_sentinel:disposition&quot; | head 50')" title="处置审计日志">📜 处置审计</button>
+          <button class="spl-preset-btn" onclick="splPreset('search index=main | head 100')" title="全部事件">📋 全部</button>
         </div>
         <div class="query-input-row">
-          <input id="splQueryInput" placeholder="输入 SPL 查询: search index=gateway_events | stats count by module..." onkeydown="if(event.key==='Enter')splunkSearch()">
+          <input id="splQueryInput" placeholder="输入 SPL 查询: search index=main | stats count by module..." onkeydown="if(event.key==='Enter')splunkSearch()">
           <select id="splTimeRange" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:4px;font-family:var(--font-mono);font-size:11px">
             <option value="-15m">最近 15 分钟</option>
             <option value="-1h">最近 1 小时</option>
@@ -408,7 +408,7 @@ function renderAlerts(){
       <div class="alert-meta">
         <span>🖥 ${esc(a.gateway_id||'?')}</span>
         <span>📌 ${esc(a.event_type||'?')}</span>
-        <span>🕐 ${(a.timestamp||'').substring(11,19)}</span>
+        <span>🕐 ${tzLocal(a.timestamp,'time')}</span>
         <span>${a.risk_level==='high'?'🔴':a.risk_level==='medium'?'🟡':'🟢'} ${esc(a.risk_level||'')}</span>
       </div>
       <div class="rule-tags">${(a.rule_matches||[]).map(m=>`
@@ -698,7 +698,7 @@ async function splunkSearch(){
     const res=await(await fetch('/api/splunk/search',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({query:q,time_range:timeRange})
+      body:JSON.stringify({query:q,earliest:timeRange,latest:'now'})
     })).json();
 
     const events=res.events||res.results||[];
@@ -711,7 +711,7 @@ async function splunkSearch(){
 
     tbody.innerHTML=events.map((e,i)=>`
       <tr class="${e.blocked?'blocked':''}" onclick="showSplRaw(${i})">
-        <td>${esc((e.timestamp||e._time||'').substring(0,19))}</td>
+        <td>${esc(tzLocal(e.timestamp||e._time,'full'))}</td>
         <td>${esc(e.module||e.event_type||'-')}</td>
         <td style="color:${e.blocked?'var(--critical)':'var(--neon)'}">${e.blocked?'BLOCKED':'pass'}</td>
         <td style="color:${(e.risk_score||0)>=80?'var(--critical)':(e.risk_score||0)>=50?'var(--medium)':'var(--neon)'}">${e.risk_score||'-'}</td>
@@ -742,6 +742,14 @@ async function setMode(mode){
 
 // ── Utils ─────────────────────────────────────────────
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+// 把网关写入的 UTC 时间戳按浏览器本地时区显示；解析失败则回退原串截取（如已是本地的 _time）。
+// mode='time' 只显示时分秒，'full' 显示完整日期时间。
+function tzLocal(s, mode){
+  if(!s) return '';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return mode==='time' ? String(s).substring(11,19) : String(s).substring(0,19);
+  return mode==='time' ? d.toLocaleTimeString() : d.toLocaleString();
+}
 
 // ── Auto-refresh ──────────────────────────────────────
 async function refresh(){

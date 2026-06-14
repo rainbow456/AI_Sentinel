@@ -16,12 +16,13 @@ Core capabilities:
 # Load .env before any other imports (env vars must be set before modules are imported)
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 
 import os
 import re
+import sys
 import json
 import time
 import uuid
@@ -30,6 +31,14 @@ import logging
 import importlib
 import pkgutil
 from typing import Callable, Dict, List, Any, Optional
+
+# Make stdout/stderr tolerant of consoles that can't encode emoji (e.g. Windows
+# GBK/cp936): replace unencodable chars instead of crashing the process.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -135,6 +144,11 @@ def load_detectors() -> List[tuple]:
         if getattr(module, "SUPERSEDED", False):
             continue
 
+        # 标记 MANUAL=True 的模块（如 llm_semantic）不进无条件检测链，
+        # 由分级编排器（run_detectors → semantic_adjudicate）按需显式调用。
+        if getattr(module, "MANUAL", False):
+            continue
+
         detect_fn: Optional[Callable[[str], Dict[str, Any]]] = getattr(
             module, "detect", None
         )
@@ -194,6 +208,87 @@ def run_detectors(prompt: str, request_id: str) -> Optional[Dict[str, Any]]:
             return hit
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# LLM 语义裁决（第二层）/ tiered LLM semantic adjudication
+# ---------------------------------------------------------------------------
+# EN: lazily imported so a missing/disabled semantic module never breaks the gateway.
+# 中文：惰性导入，语义模块缺失或禁用都不影响网关主流程。
+try:
+    from gateway.middlewares import llm_semantic
+except Exception:  # pragma: no cover
+    try:
+        from middlewares import llm_semantic  # type: ignore
+    except Exception:
+        llm_semantic = None  # type: ignore
+
+
+def semantic_adjudicate(
+    prompt: str, rule_hit: Optional[Dict[str, Any]], request_id: str
+) -> Optional[Dict[str, Any]]:
+    """
+    EN: Second-layer semantic adjudication on top of the rule-layer result.
+        Tiered to control latency/cost — the LLM is consulted ONLY when the
+        rules are uncertain:
+          1) rules already decisive (score >= block_threshold) -> skip LLM, keep hit;
+          2) gray zone or clean -> ask Claude; escalate if it finds what rules missed;
+          3) optional, flag-gated -> de-escalate a low-risk false positive.
+        Fail-soft: any error / disabled / timeout keeps the rule-layer result.
+    中文：在规则层结论之上做第二层语义裁决。分级触发以控延迟/成本——仅当规则「拿不准」
+        时才调用 LLM：①规则已可判拦（分数≥block_threshold）→ 不调 LLM，保留命中；
+        ②灰区或未命中 → 交给 Claude，发现规则漏掉的攻击则升级；③可选、需开关 → 对低危
+        误报降噪。Fail-soft：出错/未启用/超时一律保留规则层结论。
+    """
+    if llm_semantic is None or not llm_semantic.is_enabled():
+        return rule_hit
+
+    pol = policy_store.get()
+    block = int(pol.get("block_threshold", 70))
+    rule_score = int((rule_hit or {}).get("risk_score", 0))
+
+    # ① 规则层已可判拦，无需再付 LLM 延迟
+    if rule_hit is not None and rule_score >= block:
+        return rule_hit
+
+    # ② 灰区 / 未命中：交给语义裁决（在洗白后的视图上判断）
+    try:
+        verdict = llm_semantic.classify(expand_input(prompt), context={"rule_hit": rule_hit})
+    except Exception as exc:  # 双保险：classify 内已 fail-soft，这里再兜一层
+        log.warning("semantic_adjudicate raised",
+                    extra={"event": {"request_id": request_id, "error": str(exc)}})
+        return rule_hit
+    if verdict is None:
+        return rule_hit
+
+    llm_score = int(verdict.get("risk_score", 0))
+
+    # 升级：LLM 发现了规则层漏掉/低估的攻击
+    if verdict.get("is_malicious") and llm_score > rule_score:
+        hit = dict(verdict)
+        hit.setdefault("detector", "llm_semantic")
+        log.warning(
+            "Semantic adjudication escalated input",
+            extra={"event": {"request_id": request_id, "rule_score": rule_score,
+                             "llm_score": llm_score, "reason": verdict.get("reason", "")}},
+        )
+        return hit
+
+    # ③ 降噪（需 LLM_DETECT_ALLOW_DEESCALATE 开启）：对低危误报清除
+    if (rule_hit is not None and not verdict.get("is_malicious")
+            and llm_semantic.allow_deescalate()
+            and rule_score < block
+            and rule_hit.get("rule_hit") in llm_semantic.DEESCALATABLE
+            and float(verdict.get("confidence", 0)) >= 0.8):
+        log.info(
+            "Semantic adjudication de-escalated false positive",
+            extra={"event": {"request_id": request_id,
+                             "rule_hit": rule_hit.get("rule_hit"),
+                             "reason": verdict.get("reason", "")}},
+        )
+        return None
+
+    return rule_hit
 
 
 # ---------------------------------------------------------------------------
@@ -409,9 +504,22 @@ async def on_startup() -> None:
     rule_engine.reload()
 
     DETECTORS = load_detectors()
+
+    # LLM 语义层：软检查。开启但缺 key 只 warning、不 fail——网关照常启动，语义层不生效。
+    if llm_semantic is not None:
+        reason = llm_semantic.misconfig_reason()
+        if reason:
+            log.warning("LLM semantic layer inactive", extra={"event": {"reason": reason}})
+        elif llm_semantic.is_enabled():
+            log.info(
+                "LLM semantic adjudication enabled",
+                extra={"event": {"model": llm_semantic.CFG.model}},
+            )
+
     log.info(
         "Gateway startup complete",
-        extra={"event": {"detector_count": len(DETECTORS), "rule_count": rs.count()}},
+        extra={"event": {"detector_count": len(DETECTORS), "rule_count": rs.count(),
+                         "semantic_enabled": bool(llm_semantic and llm_semantic.is_enabled())}},
     )
 
 
@@ -451,7 +559,9 @@ async def chat(req: ChatRequest, request: Request) -> JSONResponse:
         },
     )
 
-    hit = run_detectors(req.prompt, request_id)
+    # 规则层检测 + LLM 语义裁决（第二层）。在线程池中跑，避免语义调用阻塞事件循环。
+    hit = await asyncio.to_thread(run_detectors, req.prompt, request_id)
+    hit = await asyncio.to_thread(semantic_adjudicate, req.prompt, hit, request_id)
     cost_ms = round((time.perf_counter() - start) * 1000, 2)
 
     # 按可调阈值判定是否拦截：命中分数 >= block_threshold 才拦（低于阈值=检出但放行）
@@ -550,7 +660,10 @@ async def confirm_action(req: ConfirmActionRequest, request: Request) -> JSONRes
     # EN: 2) fall through to the full detector chain (run_detectors de-obfuscates internally).
     # 中文：2) 未命中高危词时，运行完整检测器链（run_detectors 内部已做洗白）。
     if hit is None:
-        hit = run_detectors(merged_text, request_id)
+        hit = await asyncio.to_thread(run_detectors, merged_text, request_id)
+    # EN: 3) second-layer LLM semantic adjudication (no-op unless enabled).
+    # 中文：3) 第二层 LLM 语义裁决（未启用时为空操作），捕捉规则漏掉的语义级恶意动作。
+    hit = await asyncio.to_thread(semantic_adjudicate, merged_text, hit, request_id)
 
     allowed = hit is None
     if allowed:

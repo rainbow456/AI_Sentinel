@@ -9,7 +9,7 @@
 # Load .env before reading env vars at module scope
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 

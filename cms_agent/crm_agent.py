@@ -42,7 +42,7 @@ SQLite 数据库文件 crm.db（已存在则复用）。
 # Load .env before reading any env vars
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 

@@ -17,7 +17,7 @@ Exposes a global singleton `sender`. / 暴露全局单例 `sender`。
 # Load .env before reading env vars (module-scope os.getenv calls in __init__)
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # .env 优先于脚本/shell 注入的同名环境变量
 except ImportError:
     pass
 
@@ -122,6 +122,14 @@ class AsyncSender:
         self.hec_url = hec_url or os.getenv("SPLUNK_HEC_URL")
         self.hec_token = hec_token or os.getenv("SPLUNK_HEC_TOKEN")
         self.sourcetype = sourcetype
+        # EN: target Splunk index. Events go to `main` (the default index the HEC
+        #     token can write to and that every role searches by default), so the
+        #     Analyst's log module finds them without extra index permissions.
+        #     Override with SPLUNK_HEC_INDEX to route to a dedicated index.
+        # 中文：目标 Splunk 索引。事件写入 `main`（HEC token 默认可写、且所有角色默认
+        #     都会搜索的索引），Analyst 日志模块无需额外索引权限即可查到。
+        #     如需专属索引，用 SPLUNK_HEC_INDEX 覆盖。
+        self.index = os.getenv("SPLUNK_HEC_INDEX", "main")
         self.timeout = timeout
         # EN: TLS verification toggle. Splunk HEC commonly uses a self-signed cert
         #     on https://:8088, which makes httpx raise SSL errors by default.
@@ -161,10 +169,13 @@ class AsyncSender:
 
     def _build_payload(self, event: SecurityEvent) -> Dict[str, Any]:
         """将事件封装为 Splunk HEC 信封格式。"""
-        return {
+        payload: Dict[str, Any] = {
             "sourcetype": self.sourcetype,
             "event": event.model_dump(),
         }
+        if self.index:
+            payload["index"] = self.index
+        return payload
 
     def _headers(self) -> Dict[str, str]:
         return {

@@ -13,7 +13,7 @@ param([switch]$Web)
 # 配置（按需修改）
 # ---------------------------------------------------------------------------
 $SPLUNK_HEC_URL   = "http://localhost:8088/services/collector"   # 注意是 8088，不是 8000
-$SPLUNK_HEC_TOKEN = "b122039b-c1bd-40ca-a16e-9873126b70a3"
+$SPLUNK_HEC_TOKEN = "00000000-0000-0000-0000-000000000000"
 $SPLUNK_HEC_VERIFY = ""        # HEC 是 https 自签证书时填 "0"；http 留空
 $GATEWAY_URL      = "http://localhost:3001"
 $SENTINEL_ENABLED = "1"        # 设 "0" 可关闭守卫

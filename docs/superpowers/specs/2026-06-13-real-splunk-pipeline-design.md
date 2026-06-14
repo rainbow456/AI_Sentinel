@@ -185,14 +185,14 @@ Add:
 ```powershell
 # Splunk HEC (Gateway → Splunk)
 $env:SPLUNK_HEC_URL = "https://localhost:8088/services/collector"
-$env:SPLUNK_HEC_TOKEN = "b122039b-c1bd-40ca-a16e-9873126b70a3"
+$env:SPLUNK_HEC_TOKEN = "00000000-0000-0000-0000-000000000000"
 $env:SPLUNK_HEC_VERIFY = "0"
 
 # Splunk Search (Analyst → Splunk)
 $env:SPLUNK_HOST = "localhost"
 $env:SPLUNK_PORT = "8089"
 $env:SPLUNK_USERNAME = "admin"
-$env:SPLUNK_PASSWORD = "hero54110"
+$env:SPLUNK_PASSWORD = "changeme"
 $env:SPLUNK_USE_REAL = "true"
 $env:SPLUNK_USE_SSL = "false"
 $env:SPLUNK_VERIFY_SSL = "false"
@@ -205,7 +205,7 @@ $env:GATEWAY_API_KEY = ""
 
 # Disposition HEC (Analyst → Splunk)
 $env:DISPOSITION_HEC_URL = "https://localhost:8088/services/collector"
-$env:DISPOSITION_HEC_TOKEN = "b122039b-c1bd-40ca-a16e-9873126b70a3"
+$env:DISPOSITION_HEC_TOKEN = "00000000-0000-0000-0000-000000000000"
 ```
 
 ### 9. Files to Remove/Deprecate
