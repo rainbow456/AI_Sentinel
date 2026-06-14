@@ -102,6 +102,29 @@ def get_report(alert_id):
     return jsonify({"error": "Alert not found"}), 404
 
 
+@app.route("/api/demo/trigger", methods=["POST"])
+def demo_trigger():
+    """演示：载入 3-Agent 退款共谋场景，构建决策树+涌现检测并注入为一条告警。"""
+    _init_agent()
+    try:
+        alert_id = _agent.load_demo_scenario()  # self-locking
+        return jsonify({"success": True, "alert_id": alert_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/spans/ingest", methods=["POST"])
+def spans_ingest():
+    """方案A阶段1：从 Splunk 拉取一条 trace 的 span，构建决策树+涌现检测并注入为告警。"""
+    _init_agent()
+    data = request.get_json(silent=True) or {}
+    trace_id = data.get("trace_id", "trace-refund-001")
+    try:
+        return jsonify(_agent.ingest_trace_from_splunk(trace_id))  # self-locking
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/report/batch")
 def get_batch_report():
     _init_agent()
@@ -157,6 +180,20 @@ def nl_query():
         return jsonify({"error": "Empty query"}), 400
     result = _agent.process_nl_query(query_text)
     return jsonify(result)
+
+
+@app.route("/api/dispositions/execute", methods=["POST"])
+def execute_disposition():
+    """执行某条告警的处置方案（需求2/3）。body: {alert_id, rule_id?}。
+    OBSERVE 模式用户点「执行」时调用；block→网关封禁，alert→记录；
+    完成后写回 Splunk status 并把告警移入处置记录页。"""
+    _init_agent()
+    data = request.get_json(silent=True) or {}
+    alert_id = data.get("alert_id", "")
+    rule_id = data.get("rule_id")
+    if not alert_id:
+        return jsonify({"success": False, "error": "缺少 alert_id"}), 400
+    return jsonify(_agent.execute_disposition(alert_id, rule_id))
 
 
 @app.route("/api/action/execute", methods=["POST"])

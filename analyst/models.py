@@ -294,6 +294,7 @@ class AlertRecord:
     risk_level: str = "medium"              # high / medium / low
     pending_block: bool = False             # True in OBSERVE mode, waiting for human
     blocked: bool = False                   # True after block executed
+    handled: bool = False                   # True once disposed — hidden from alert list
     disposition_id: Optional[str] = None    # Linked disposition record ID after block
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -316,6 +317,7 @@ class AlertRecord:
             "storyline": self.storyline[:300] if self.storyline else "",
             "pending_block": self.pending_block,
             "blocked": self.blocked,
+            "handled": self.handled,
             "disposition_id": self.disposition_id,
             "has_decision_tree": self.decision_tree is not None,
         }
@@ -359,6 +361,8 @@ class DispositionRecord:
     detail: str = ""
     triggered_rule: str = ""
     risk_level: str = "medium"
+    alert_text: str = ""             # 告警原文（被检 user_input），处置记录页展示
+    mode: str = "observe"            # 处置模式：auto（自动）/ observe（人工确认）
     created_at: datetime = field(default_factory=datetime.now)
     acknowledged_at: Optional[datetime] = None
 
@@ -374,6 +378,8 @@ class DispositionRecord:
             "detail": self.detail,
             "triggered_rule": self.triggered_rule,
             "risk_level": self.risk_level,
+            "alert_text": self.alert_text,
+            "mode": self.mode,
             "created_at": self.created_at.isoformat(),
             "acknowledged_at": self.acknowledged_at.isoformat() if self.acknowledged_at else None,
         }

@@ -63,7 +63,20 @@ class SecurityAgent:
         self._running = True
         self._processed_event_ids: set[str] = set()
         self._lock = threading.Lock()
+        # Auto-enable the Claude-backed NL path when ANTHROPIC_API_KEY is present,
+        # so NL→SPL / intent classification work out of the box (no UI config call
+        # needed). The actual HTTP call lives in analyst/llm_client.py.
         self._llm_config: dict = {}
+        _llm_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if _llm_key:
+            self._llm_config = {
+                "provider": os.getenv("LLM_PROVIDER", "anthropic"),
+                "api_key": _llm_key,
+                "model": (os.getenv("ANALYST_LLM_MODEL")
+                          or os.getenv("LLM_DETECT_MODEL")
+                          or "claude-opus-4-8").strip(),
+            }
+            print(f"{_ts()} 🔧 LLM 已启用: {self._llm_config['model']}")
         # Polling state (replaces _demo_cycle)
         self._poll_thread: threading.Thread | None = None
         self._poll_interval: int = self._config.poll_interval
@@ -204,8 +217,17 @@ class SecurityAgent:
 
     def process_nl_query(self, query_text: str) -> dict:
         _think(f"处理自然语言指令: 「{query_text}」")
-        intent = classify_intent(query_text)
-        print(f"  {DIM}意图分类: {intent}{RESET}")
+        intent = None
+        if self._llm_config.get("api_key"):
+            try:
+                from . import llm_client
+                intent = llm_client.classify_intent(query_text)
+            except Exception:
+                intent = None
+        method = "llm" if intent else "keyword"
+        if not intent:
+            intent = classify_intent(query_text)  # keyword fallback
+        print(f"  {DIM}意图分类({method}): {intent}{RESET}")
         if intent == INTENT_MODE_SWITCH:
             return self._handle_mode_switch(query_text)
         elif intent == INTENT_ACTION:
@@ -407,7 +429,15 @@ class SecurityAgent:
         return " ".join(parts)
 
     def _nl_to_spl_llm(self, query: str) -> str:
-        print(f"  {YELLOW}⚠ LLM SPL生成未完整实现，回退到关键词{RESET}")
+        """NL→SPL via Claude (analyst/llm_client). Falls back to keyword on failure."""
+        try:
+            from . import llm_client
+            spl = llm_client.nl_to_spl(query)
+            if spl:
+                return spl
+        except Exception as e:
+            print(f"  {YELLOW}⚠ LLM SPL 调用异常: {e}{RESET}")
+        print(f"  {YELLOW}⚠ LLM SPL 生成失败，回退关键词{RESET}")
         return self._nl_to_spl_keyword(query)
 
     def _summarize_query_results(self, events: list, query: str) -> str:
@@ -505,6 +535,7 @@ class SecurityAgent:
 
     def _record_disposition(self, alert: AlertRecord, operator: str, action: str,
                             command: str, result: str, detail: str,
+                            alert_text: str = "", mode: str = "observe",
                             acknowledged_at: Optional[datetime] = None):
         """Create and store a disposition record."""
         d = DispositionRecord(
@@ -518,6 +549,8 @@ class SecurityAgent:
             detail=detail,
             triggered_rule=alert.event.triggered_rule,
             risk_level=alert.risk_level,
+            alert_text=alert_text or alert.event.user_input,
+            mode=mode,
             acknowledged_at=acknowledged_at,
         )
         with self._lock:
@@ -533,7 +566,7 @@ class SecurityAgent:
                 "event_id": d.event_id,
                 "disposition_id": d.disposition_id,
                 "status": d.result,
-                "mode": self.mode.value,
+                "mode": d.mode,
                 "operator": d.operator,
                 "action": d.action,
                 "command": d.command,
@@ -554,24 +587,18 @@ class SecurityAgent:
         if not matches: return
         br = [m for m in matches if m.action=="block"]; ar = [m for m in matches if m.action=="alert"]
         risk = "high" if any(m.confidence>0.8 for m in br+ar) else "medium" if any(m.confidence>0.5 for m in br+ar) else "low"
+        # 网关已在源头阻断(event.blocked=True) → analyst 仅做告警预览，不重复处置；
+        # 仅当网关放行/漏检(blocked=False)且命中 block 级规则时，analyst 才补处置
+        # （灰区放行、或仅 analyst 关联多 Agent 才发现的共谋涌现）。
+        gw_handled = bool(event.blocked)
         alert = AlertRecord(alert_id=f"ALT-{uuid.uuid4().hex[:8]}", event=event, rule_matches=br+ar, risk_level=risk,
-            pending_block=(self.mode==AgentMode.OBSERVE and len(br)>0))
-        if self.mode==AgentMode.AUTO and br:
-            r = self.execute_block(event)
-            alert.blocked = r.get("status")=="blocked"
-            alert.pending_block = False
-            # AUTO mode: record disposition with operator="auto"
-            cmd = f"send_block_command(gateway_id={event.gateway_id}, target={event.event_id}, reason=Rule: {event.triggered_rule})"
-            d = self._record_disposition(
-                alert=alert, operator="auto", action="block",
-                command=cmd,
-                result=r.get("status", DispositionStatus.SIMULATED),
-                detail=f"自动阻断: 规则 {event.triggered_rule} 匹配, risk_score={event.risk_score}",
-            )
-            alert.disposition_id = d.disposition_id
-            # Write back to Splunk HEC
-            self._send_disposition_to_splunk(d)
+            blocked=gw_handled,
+            pending_block=(not gw_handled and self.mode==AgentMode.OBSERVE and len(br)>0))
         with self._lock: self.alerts.append(alert)
+        # AUTO 模式：对网关漏检的 block 级事件自动执行首要处置方案，完成后转入处置记录页。
+        # OBSERVE 模式：保留为待确认告警，由用户在右侧面板逐方案点击执行。
+        if not gw_handled and self.mode==AgentMode.AUTO and br:
+            self.execute_disposition(alert.alert_id)
 
     def execute_block(self, event):
         gw = self._mcp_call("gateway-control","send_block_command",
@@ -584,31 +611,202 @@ class SecurityAgent:
         return r
 
     def confirm_block(self, alert_id):
+        """兼容旧入口（/api/block）：等价于对该告警执行首要处置方案。"""
+        return self.execute_disposition(alert_id)
+
+    def execute_disposition(self, alert_id, rule_id=None):
+        """执行某条告警的处置方案（需求2/3）。
+        rule_id 指定某条匹配规则的方案；不传则取首个(block 优先)。
+        - block 类 → 调网关封禁来源；alert 类 → 仅记录(observed)，无网关动作。
+        完成后：记录 DispositionRecord(含告警原文/模式) → 写回 Splunk status →
+        标记 alert.handled=True（从告警栏移入处置记录页, 需求4）。
+        AUTO 模式 operator=auto、OBSERVE 模式 operator=admin。"""
+        from .disposition_planner import plans_for_alert
         with self._lock:
-            for a in self.alerts:
-                if a.alert_id==alert_id and a.pending_block:
-                    r = self.execute_block(a.event)
-                    # OBSERVE mode: record disposition with operator="admin"
-                    cmd = f"send_block_command(gateway_id={a.event.gateway_id}, target={a.event.event_id}, reason=Rule: {a.event.triggered_rule})"
-                    d = self._record_disposition(
-                        alert=a, operator="admin", action="block",
-                        command=cmd,
-                        result=r.get("status", DispositionStatus.SIMULATED),
-                        detail=f"人工确认阻断: 规则 {a.event.triggered_rule} 匹配, risk_score={a.event.risk_score}",
-                        acknowledged_at=datetime.now(),
-                    )
-                    a.disposition_id = d.disposition_id
-                    # Write back to Splunk HEC
-                    self._send_disposition_to_splunk(d)
-                    return {"success":True, "result": r, "disposition_id": d.disposition_id}
-        return {"success":False,"error":"Not found"}
+            alert = next((a for a in self.alerts if a.alert_id == alert_id), None)
+        if alert is None:
+            return {"success": False, "error": "告警不存在"}
+        if alert.handled:
+            return {"success": False, "error": "该告警已处置"}
+        if getattr(alert.event, "blocked", False):
+            return {"success": False, "error": "网关已在源头阻断，无需 analyst 重复处置"}
+        plans = plans_for_alert(alert)
+        if rule_id:
+            plans = [p for p in plans if p["rule_id"] == rule_id] or plans
+        if not plans:
+            return {"success": False, "error": "无可执行处置方案"}
+        plan = plans[0]
+        mode = self.mode.value
+        operator = "auto" if self.mode == AgentMode.AUTO else "admin"
+
+        if plan["disp_action"] == "block":
+            r = self.execute_block(alert.event)           # 调网关 /bans（自带锁/兜底）
+            status = r.get("status", DispositionStatus.SIMULATED)
+        else:
+            status = "observed"                            # alert 类：仅记录，无封禁
+
+        d = self._record_disposition(
+            alert=alert, operator=operator, action=plan["disp_action"],
+            command=plan["command"], result=status,
+            detail=f"{plan['title']}: {plan['plan_text']}",
+            alert_text=alert.event.user_input, mode=mode,
+            acknowledged_at=(None if self.mode == AgentMode.AUTO else datetime.now()),
+        )
+        with self._lock:
+            alert.disposition_id = d.disposition_id
+            alert.pending_block = False
+            alert.blocked = (plan["disp_action"] == "block" and status == "blocked")
+            alert.handled = True
+        self._send_disposition_to_splunk(d)
+        print(f"{_ts()} {'🤖自动' if operator=='auto' else '👤人工'}处置 {alert_id} "
+              f"[{plan['rule_name']}] → {plan['disp_action']}/{status}")
+        return {"success": True, "disposition_id": d.disposition_id,
+                "status": status, "mode": mode, "plan": plan}
 
     def build_decision_tree(self, spans): return build_decision_tree(spans)
     def identify_key_nodes(self, tree): return identify_key_nodes(tree)
     def detect_emergence(self, tree): return detect_emergence(tree)
     def generate_storyline(self, tree): return generate_storyline(tree)
 
-    def get_alerts(self): return [a.to_dict() for a in self.alerts] if self._lock else []
+    def load_demo_scenario(self) -> str:
+        """演示：把内置的 3-Agent 退款共谋场景(demo_spans)接入实时流——
+        构建因果决策树 + 涌现检测，作为一条带 Span 的告警注入，
+        让 UI 的决策树 / 涌现行为视图端到端真正可见。
+        重复调用先清掉上一条 demo（按 trace_id / span_id / alert 前缀去重）。"""
+        from .demo_spans import DEMO_SPANS
+        from .models import Finding
+        from .report_engine import ReportA, ReportB
+
+        spans = list(DEMO_SPANS)
+        tree = build_decision_tree(spans)
+        anomalies = detect_emergence(tree)
+
+        event = GatewayEvent(
+            event_id=f"DEMO-{tree.trace_id}",
+            timestamp=datetime.now(),
+            module="action_guard",
+            # 共谋涌现是网关单点拦不住、仅 analyst 关联多 Agent 才发现的 → blocked=False，
+            # 使其走 analyst 处置路径（OBSERVE 待确认 / AUTO 自动处置），展示 analyst 独有价值。
+            blocked=False,
+            handler="gateway",
+            risk_score=95,
+            user_input=("3-Agent退款场景：技术支持私下通知退款Agent可退款，"
+                        "退款Agent绕过客服确认、并误读金额(￥199→￥299)"),
+            subject_name="execute_refund",
+            agent_id="refund",
+            findings=[Finding(detector="causal_analyzer", rule_hit="abnormal_collaboration",
+                              severity="critical", matched="tech_support→refund",
+                              description="3-agent refund collusion (emergent)")],
+            gateway_id="gateway-01",
+            llm_provider="anthropic",
+            raw_spans=spans,
+        )
+        rule_matches = self.rule_engine.match(event)
+        report_a = ReportA(tree, anomalies, rule_matches)
+        alert = AlertRecord(
+            alert_id=f"ALT-DEMO-{uuid.uuid4().hex[:6]}",
+            event=event,
+            rule_matches=rule_matches,
+            decision_tree={"mermaid": report_a.to_mermaid(),
+                           "emergence_summary": ReportB(tree, anomalies).summary(),
+                           "narratives": report_a.generate_narratives(),
+                           "tree_metadata": tree.metadata},
+            storyline=generate_storyline(tree),
+            risk_level="high",
+            pending_block=(self.mode == AgentMode.OBSERVE),
+        )
+        demo_span_ids = {s.span_id for s in spans}
+        with self._lock:
+            self.alerts = [a for a in self.alerts if not a.alert_id.startswith("ALT-DEMO")]
+            self.trees = [t for t in self.trees if t.trace_id != tree.trace_id]
+            self.anomalies = [an for an in self.anomalies
+                              if not (set(an.involved_span_ids) & demo_span_ids)]
+            self.alerts.insert(0, alert)
+            self.trees.append(tree)
+            self.anomalies.extend(anomalies)
+        print(f"{_ts()} 🎬 已载入演示场景: tree={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
+        return alert.alert_id
+
+    def ingest_trace_from_splunk(self, trace_id: str = "trace-refund-001",
+                                 earliest: str = "-30d") -> dict:
+        """方案A阶段1：从 Splunk 拉取一条 trace 的 span(sourcetype=ai_sentinel:span)，
+        还原为 Span → 构建决策树 + 涌现检测 → 注入为带 Span 的告警。
+        与 load_demo_scenario 的区别：span 数据是【真从 Splunk 查回】的，不是硬编码。"""
+        from .models import Span, Finding
+        from .report_engine import ReportA, ReportB
+
+        result = self._mcp_call(
+            "splunk-query", "splunk_search",
+            {"query": f'sourcetype="ai_sentinel:span" trace_id="{trace_id}"',
+             "earliest": earliest, "latest": "now"},
+            fallback=None)
+        rows = (result or {}).get("events") or []
+        spans: list[Span] = []
+        for ed in rows:
+            try:
+                ts = datetime.fromisoformat(ed["timestamp"]) if isinstance(ed.get("timestamp"), str) else datetime.now()
+            except Exception:
+                ts = datetime.now()
+            spans.append(Span(
+                agent_id=ed.get("agent_id", ""),
+                trace_id=ed.get("trace_id", trace_id),
+                span_id=ed.get("span_id", ""),
+                parent_span_id=ed.get("parent_span_id") or None,
+                action=ed.get("action", ""),
+                thought=ed.get("thought", ""),
+                tool_call=ed.get("tool_call") if isinstance(ed.get("tool_call"), dict) else None,
+                message_to=ed.get("message_to") or None,
+                message_content=ed.get("message_content") or None,
+                timestamp=ts,
+                causality_chain=ed.get("causality_chain") if isinstance(ed.get("causality_chain"), list) else [],
+                context_snapshot=ed.get("context_snapshot") if isinstance(ed.get("context_snapshot"), dict) else None,
+                metadata=ed.get("metadata") if isinstance(ed.get("metadata"), dict) else {},
+            ))
+        if not spans:
+            return {"success": False, "error": f"Splunk 中没有 trace_id={trace_id} 的 span（先跑 span_emitter.py）"}
+
+        tree = build_decision_tree(spans)
+        anomalies = detect_emergence(tree)
+        event = GatewayEvent(
+            event_id=f"TRACE-{tree.trace_id}",
+            timestamp=datetime.now(),
+            module="action_guard", blocked=True, handler="gateway", risk_score=95,
+            user_input=f"多Agent trace {tree.trace_id}（{tree.total_steps} 步，来自 Splunk）",
+            subject_name="multi_agent_trace", agent_id=(spans[-1].agent_id if spans else "refund"),
+            findings=[Finding(detector="causal_analyzer", rule_hit="abnormal_collaboration",
+                              severity="critical", matched=tree.trace_id,
+                              description="multi-agent emergent (ingested from Splunk spans)")],
+            gateway_id="gateway-01", llm_provider="anthropic", raw_spans=spans,
+        )
+        rule_matches = self.rule_engine.match(event)
+        report_a = ReportA(tree, anomalies, rule_matches)
+        alert = AlertRecord(
+            alert_id=f"ALT-TRACE-{uuid.uuid4().hex[:6]}",
+            event=event, rule_matches=rule_matches,
+            decision_tree={"mermaid": report_a.to_mermaid(),
+                           "emergence_summary": ReportB(tree, anomalies).summary(),
+                           "narratives": report_a.generate_narratives(),
+                           "tree_metadata": tree.metadata},
+            storyline=generate_storyline(tree), risk_level="high",
+            pending_block=(self.mode == AgentMode.OBSERVE),
+        )
+        span_ids = {s.span_id for s in spans}
+        with self._lock:
+            self.alerts = [a for a in self.alerts if not a.alert_id.startswith("ALT-TRACE")]
+            self.trees = [t for t in self.trees if t.trace_id != tree.trace_id]
+            self.anomalies = [an for an in self.anomalies
+                              if not (set(an.involved_span_ids) & span_ids)]
+            self.alerts.insert(0, alert)
+            self.trees.append(tree)
+            self.anomalies.extend(anomalies)
+        print(f"{_ts()} 🛰 已从 Splunk 摄取 trace={tree.trace_id} spans={len(spans)} anomalies={len(anomalies)}")
+        return {"success": True, "alert_id": alert.alert_id,
+                "trace_id": tree.trace_id, "spans": len(spans), "anomalies": len(anomalies)}
+
+    def get_alerts(self):
+        # 只返回未处置的告警；已处置(handled)的转入处置记录页（需求4）。
+        with self._lock:
+            return [a.to_dict() for a in self.alerts if not a.handled]
     def get_alert(self, aid):
         with self._lock:
             for a in self.alerts:

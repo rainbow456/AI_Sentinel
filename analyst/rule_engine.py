@@ -10,37 +10,70 @@ from .models import GatewayEvent, RuleDef, RuleMatch
 class RuleEngine:
     """Security rule engine with hardcoded defaults."""
 
+    # 规则 name 与网关真实产出的 findings[].rule_hit 对齐（实测 taxonomy），
+    # 使 _match_single 的「rule.name ↔ finding.rule_hit」主信号能精确命中。
+    # patterns 既含网关 rule_hit token（命中 findings），也含少量 user_input 关键词。
     DEFAULT_RULES = [
-        RuleDef(rule_id="R001", name="injection_detected",
-                description="检测到注入攻击（SQL注入/XSS/命令注入）",
-                action="block", severity="critical",
-                patterns=["sql injection", "injection", "xss", "union select",
-                           "command injection", "1=1", "<script>", "../etc/passwd"]),
-        RuleDef(rule_id="R002", name="sensitive_data_leak",
-                description="检测到敏感数据泄露（密钥/密码/Token在输出中）",
-                action="block", severity="critical",
-                patterns=["password", "secret", "token", "api_key", "private key",
-                           "-----BEGIN", "access_key", "credential"]),
-        RuleDef(rule_id="R003", name="prompt_injection",
-                description="检测到提示词注入攻击（试图覆盖系统指令）",
+        RuleDef(rule_id="R001", name="prompt_injection",
+                description="提示词注入：试图用指令覆盖/越权系统提示",
                 action="block", severity="high",
-                patterns=["ignore previous", "system prompt", "you are now",
-                           "new instructions", "forget all", "pretend you are",
-                           "DAN mode", "jailbreak"]),
+                patterns=["prompt_injection", "ignore previous", "ignore all previous",
+                           "system prompt", "forget all", "jailbreak", "you are now"]),
+        RuleDef(rule_id="R002", name="system_instruction_override",
+                description="系统指令覆盖：诱导泄露/改写系统指令",
+                action="block", severity="high",
+                patterns=["system_instruction_override", "system instruction",
+                           "override instructions", "new instructions", "disregard",
+                           "reveal the system"]),
+        RuleDef(rule_id="R003", name="role_play",
+                description="角色扮演越狱（DAN / act as / 假装你是）",
+                action="block", severity="high",
+                patterns=["role_play", "pretend you are", "act as", "roleplay", "dan mode"]),
         RuleDef(rule_id="R004", name="abnormal_collaboration",
-                description="检测到Agent间异常协作模式（可能共谋）",
+                description="Agent间异常协作（共谋）—— 由 disposition 信号触发",
                 action="block", severity="critical",
-                patterns=["action_confirmation"],
+                patterns=["abnormal_collaboration", "action_confirmation"],
                 forbidden_pairs=[["tech_support", "refund"]]),
-        RuleDef(rule_id="R005", name="rate_limit_exceeded",
-                description="检测到请求频率异常",
-                action="alert", severity="medium",
-                patterns=["rate limit", "too many requests", "429"]),
-        RuleDef(rule_id="R006", name="data_exfiltration",
-                description="检测到潜在的数据外泄行为",
+        RuleDef(rule_id="R005", name="high_risk_action_keyword",
+                description="高危动作关键词（删除/转账/授权/降级等）",
                 action="block", severity="high",
-                patterns=["select *", "dump", "export", "download all",
-                           "bulk extract", "massive query"]),
+                patterns=["high_risk_action_keyword", "delete", "drop", "transfer",
+                           "grant", "disable", "revoke", "escalate"]),
+        RuleDef(rule_id="R006", name="destructive_command",
+                description="破坏性命令（drop table / delete from / rm -rf / truncate）",
+                action="block", severity="critical",
+                patterns=["destructive_command", "rm -rf", "drop table", "delete from",
+                           "truncate", "format", "shutdown"]),
+        RuleDef(rule_id="R007", name="shell_process_exec",
+                description="Shell / 进程执行（os.system / subprocess / bash -c）",
+                action="block", severity="critical",
+                patterns=["shell_process_exec", "/bin/sh", "subprocess", "os.system",
+                           "exec(", "powershell", "cmd.exe", "bash -c"]),
+        RuleDef(rule_id="R008", name="api_key",
+                description="密钥/凭据泄露（API key / token / 私钥）",
+                action="block", severity="critical",
+                patterns=["api_key", "secret", "token", "password", "-----begin",
+                           "access_key", "credential", "private key"]),
+        RuleDef(rule_id="R009", name="high_entropy_blob",
+                description="高熵串：疑似密钥/Token/编码载荷",
+                action="alert", severity="high",
+                patterns=["high_entropy_blob", "base64", "entropy"]),
+        RuleDef(rule_id="R010", name="pii_email",
+                description="PII：邮箱地址",
+                action="alert", severity="medium",
+                patterns=["email"]),
+        RuleDef(rule_id="R011", name="pii_phone",
+                description="PII：电话号码",
+                action="alert", severity="medium",
+                patterns=["phone"]),
+        RuleDef(rule_id="R012", name="pii_url",
+                description="PII：URL（presidio 识别）",
+                action="alert", severity="low",
+                patterns=["presidio:url"]),
+        RuleDef(rule_id="R013", name="multilingual_evasion",
+                description="多语种混写规避检测",
+                action="alert", severity="medium",
+                patterns=["multilingual"]),
     ]
 
     def __init__(self, rules_path=None):
@@ -83,22 +116,26 @@ class RuleEngine:
                 f_description = getattr(finding, "description", "").lower()
 
             # Check if rule name or patterns match the rule_hit
+            finding_matched = False
             if rule.name.lower() in f_rule_hit or f_rule_hit in rule.name.lower():
                 pattern_hits += 4
                 evidence_parts.append(f"finding.rule_hit='{f_rule_hit}' ↔ rule='{rule.name}'")
-                continue
+                finding_matched = True
+            else:
+                for pat in rule.patterns:
+                    if pat.lower() in f_rule_hit:
+                        pattern_hits += 3
+                        evidence_parts.append(f"pattern '{pat}' in finding.rule_hit='{f_rule_hit}'")
+                        finding_matched = True
+                    elif pat.lower() in f_description:
+                        pattern_hits += 2
+                        evidence_parts.append(f"pattern '{pat}' in finding.description")
+                        finding_matched = True
 
-            for pat in rule.patterns:
-                if pat.lower() in f_rule_hit:
-                    pattern_hits += 3
-                    evidence_parts.append(f"pattern '{pat}' in finding.rule_hit='{f_rule_hit}'")
-                    continue
-                if pat.lower() in f_description:
-                    pattern_hits += 2
-                    evidence_parts.append(f"pattern '{pat}' in finding.description")
-
-            # Boost confidence for critical severity findings on block rules
-            if rule.action == "block" and f_severity in ("critical", "high"):
+            # Severity only AMPLIFIES a finding this rule actually matched — it must
+            # NOT add a base score to every block rule, otherwise any high-severity
+            # finding would make all block rules fire (false fan-out).
+            if finding_matched and rule.action == "block" and f_severity in ("critical", "high"):
                 pattern_hits += 1
                 if "severity" not in "".join(evidence_parts):
                     evidence_parts.append(f"finding.severity={f_severity}")
@@ -110,15 +147,20 @@ class RuleEngine:
                 pattern_hits += 1
                 evidence_parts.append(f"user_input matched '{pat}'")
 
-        # 3. Match against risk_score
-        risk_bonus = event.risk_score // 25  # 0, 1, 2, 3, 4
-        if risk_bonus > 0 and rule.action == "block":
-            pattern_hits += risk_bonus
-            if risk_bonus >= 2:
-                evidence_parts.append(f"risk_score={event.risk_score}")
+        # 3. risk_score only AMPLIFIES a rule that already matched on findings or
+        #    user_input — it must NOT create a match on its own, otherwise a single
+        #    high-risk event would falsely fire EVERY block rule at once.
+        if pattern_hits > 0 and rule.action == "block":
+            risk_bonus = event.risk_score // 25  # 0, 1, 2, 3, 4
+            if risk_bonus > 0:
+                pattern_hits += risk_bonus
+                if risk_bonus >= 2:
+                    evidence_parts.append(f"risk_score={event.risk_score}")
 
-        # 4. Collusion detection: disposition module with !blocked
-        if rule.rule_id == "R004" and event.is_collusion_indicator:
+        # 4. Collusion detection: disposition module with !blocked.
+        #    Keyed off the rule NAME (not a hardcoded rule_id) so renumbering rules
+        #    never silently breaks collusion detection.
+        if rule.name == "abnormal_collaboration" and event.is_collusion_indicator:
             pattern_hits += 3
             evidence_parts.append(f"module=disposition & !blocked (collusion signal)")
 

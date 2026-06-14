@@ -1,72 +1,150 @@
 - action: block
-  description: 检测到注入攻击（SQL/XSS/命令注入）
-  enabled: true
-  name: injection_detected
-  patterns:
-  - sql injection
-  - injection
-  - xss
-  - union select
-  - 1=1
-  - <script>
-  - ../etc/passwd
-  rule_id: R001
-  severity: critical
-- action: block
-  description: 检测到敏感数据泄露
-  enabled: true
-  name: sensitive_data_leak
-  patterns:
-  - password
-  - secret
-  - token
-  - api_key
-  - private key
-  - '-----BEGIN'
-  rule_id: R002
-  severity: critical
-- action: block
-  description: 检测到提示词注入攻击
+  description: 提示词注入：试图用指令覆盖/越权系统提示
   enabled: true
   name: prompt_injection
   patterns:
+  - prompt_injection
   - ignore previous
+  - ignore all previous
   - system prompt
-  - you are now
   - forget all
   - jailbreak
+  - you are now
+  rule_id: R001
+  severity: high
+- action: block
+  description: 系统指令覆盖：诱导泄露/改写系统指令
+  enabled: true
+  name: system_instruction_override
+  patterns:
+  - system_instruction_override
+  - system instruction
+  - override instructions
+  - new instructions
+  - disregard
+  - reveal the system
+  rule_id: R002
+  severity: high
+- action: block
+  description: 角色扮演越狱（DAN / act as / 假装你是）
+  enabled: true
+  name: role_play
+  patterns:
+  - role_play
+  - pretend you are
+  - act as
+  - roleplay
+  - dan mode
   rule_id: R003
   severity: high
 - action: block
-  description: 检测到Agent间异常协作（共谋）
+  description: Agent间异常协作（共谋）—— 由 disposition 信号触发
   enabled: true
   forbidden_pairs:
   - - tech_support
     - refund
   name: abnormal_collaboration
   patterns:
+  - abnormal_collaboration
   - action_confirmation
   rule_id: R004
   severity: critical
-- action: alert
-  description: 请求频率异常
-  enabled: true
-  name: rate_limit_exceeded
-  patterns:
-  - rate limit
-  - too many requests
-  - '429'
-  rule_id: R005
-  severity: medium
 - action: block
-  description: 潜在数据外泄
+  description: 高危动作关键词（删除/转账/授权/降级等）
   enabled: true
-  name: data_exfiltration
+  name: high_risk_action_keyword
   patterns:
-  - select *
-  - dump
-  - export
-  - download all
-  - bulk extract
-  rule_id: R006
+  - high_risk_action_keyword
+  - delete
+  - drop
+  - transfer
+  - grant
+  - disable
+  - revoke
+  - escalate
+  rule_id: R005
   severity: high
+- action: block
+  description: 破坏性命令（drop table / delete from / rm -rf / truncate）
+  enabled: true
+  name: destructive_command
+  patterns:
+  - destructive_command
+  - rm -rf
+  - drop table
+  - delete from
+  - truncate
+  - format
+  - shutdown
+  rule_id: R006
+  severity: critical
+- action: block
+  description: 敏感文件访问
+  enabled: true
+  name: 敏感文件访问
+  nl_config: 添加规则：检测敏感文件访问，模式包含 /etc/shadow/.env/config，动作 block
+  patterns:
+  - 含
+  - etc
+  - shadow
+  - .env
+  - config
+  rule_id: R007
+  severity: high
+- action: block
+  description: 密钥/凭据泄露（API key / token / 私钥）
+  enabled: true
+  name: api_key
+  patterns:
+  - api_key
+  - secret
+  - token
+  - password
+  - '-----begin'
+  - access_key
+  - credential
+  - private key
+  rule_id: R008
+  severity: critical
+- action: alert
+  description: 高熵串：疑似密钥/Token/编码载荷
+  enabled: true
+  name: high_entropy_blob
+  patterns:
+  - high_entropy_blob
+  - base64
+  - entropy
+  rule_id: R009
+  severity: high
+- action: alert
+  description: PII：邮箱地址
+  enabled: true
+  name: pii_email
+  patterns:
+  - email
+  rule_id: R010
+  severity: medium
+- action: alert
+  description: PII：电话号码
+  enabled: true
+  name: pii_phone
+  patterns:
+  - phone
+  rule_id: R011
+  severity: medium
+- action: alert
+  description: PII：URL（presidio 识别）
+  enabled: true
+  name: pii_url
+  patterns:
+  - presidio:url
+  rule_id: R012
+  severity: low
+- action: alert
+  description: 多语种混写规避检测
+  enabled: true
+  name: multilingual_evasion
+  patterns:
+  - multilingual
+  rule_id: R013
+  severity: medium

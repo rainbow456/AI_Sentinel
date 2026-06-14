@@ -49,7 +49,8 @@ log = logging.getLogger("ai_sentinel.gateway")
 # ---------------------------------------------------------------------------
 # 配置（模块加载时读一次；运行时可被 reload_config() 重新读取）
 # ---------------------------------------------------------------------------
-_API_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/") + "/v1/messages"
+_API_URL = ((os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").strip().rstrip("/")
+            + "/v1/messages")
 _API_VERSION = "2023-06-01"
 
 

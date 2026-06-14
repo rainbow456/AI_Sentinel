@@ -66,6 +66,8 @@ class SingleEventReport:
             "rule_analysis": self._rule_analysis(),
             "risk_assessment": self._risk_assessment(),
             "recommendations": self._recommendations(),
+            "log_detail": self._log_detail(),        # 原始日志详情（需求1）
+            "dispositions": self._dispositions(),     # 逐规则可执行处置方案（需求2）
             "has_spans": len(self.event.raw_spans) > 0,
         }
 
@@ -79,6 +81,8 @@ class SingleEventReport:
                 report["storyline"] = self.alert.storyline
             if self.alert.decision_tree:
                 report["mermaid"] = self.alert.decision_tree.get("mermaid", "")
+                if self.alert.decision_tree.get("emergence_summary"):
+                    report["emergence"] = self.alert.decision_tree["emergence_summary"]
 
         return report
 
@@ -149,6 +153,53 @@ class SingleEventReport:
         if not recs:
             recs.append("记录事件并持续监控")
         return recs
+
+    def _log_detail(self) -> dict:
+        """原始日志详情（需求1）：被检内容全文 + 逐条 finding。"""
+        e = self.event
+        findings = []
+        for f in (e.findings or []):
+            if isinstance(f, dict):
+                findings.append({
+                    "detector": f.get("detector", ""),
+                    "rule_hit": f.get("rule_hit", ""),
+                    "severity": f.get("severity", ""),
+                    "owasp_ast": f.get("owasp_ast", ""),
+                    "matched": f.get("matched", ""),
+                    "description": f.get("description", ""),
+                })
+            else:
+                findings.append({
+                    "detector": getattr(f, "detector", ""),
+                    "rule_hit": getattr(f, "rule_hit", ""),
+                    "severity": getattr(f, "severity", ""),
+                    "owasp_ast": getattr(f, "owasp_ast", ""),
+                    "matched": getattr(f, "matched", ""),
+                    "description": getattr(f, "description", ""),
+                })
+        return {
+            "event_id": e.event_id,
+            "timestamp": e.timestamp.isoformat(),
+            "module": e.module,
+            "blocked": e.blocked,
+            "handler": e.handler,
+            "risk_score": e.risk_score,
+            "user_input": e.user_input,
+            "subject_name": e.subject_name,
+            "agent_id": e.agent_id,
+            "gateway_id": e.gateway_id,
+            "llm_provider": e.llm_provider,
+            "findings": findings,
+        }
+
+    def _dispositions(self) -> list[dict]:
+        """逐条匹配规则的可执行处置方案（需求2）。
+        网关已在源头阻断的事件不出处置方案——analyst 仅做告警预览，
+        dashboard 的「执行处置」按钮随之消失。"""
+        if getattr(self.alert.event, "blocked", False):
+            return []
+        from .disposition_planner import plans_for_alert
+        return plans_for_alert(self.alert)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
