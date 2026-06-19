@@ -6,6 +6,8 @@
 >
 > The two modules work together to form a complete security loop: "detect → report → analyze → block".
 
+**Click [HERE](https://www.youtube.com/watch?v=mrpJmlAV0yQ) to see our demo video**
+
 ## Table of Contents
 
 1. [System Architecture](#1-system-architecture)
